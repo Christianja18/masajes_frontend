@@ -19,13 +19,21 @@ import { PackagesPage } from "./features/packages/PackagesPage";
 import { PromotionsPage } from "./features/promotions/PromotionsPage";
 import { SchedulesPage } from "./features/schedules/SchedulesPage";
 import { UsersPage } from "./features/users/UsersPage";
+import { Button } from "./shared/ui";
 import "./App.css";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
 });
 function ProtectedLayout() {
-  const { user, loading, profile } = useAuth();
+  const { user, loading, profile, signOut } = useAuth();
+  async function returnToLogin() {
+    try {
+      await signOut();
+    } finally {
+      window.location.replace("/login");
+    }
+  }
   if (loading)
     return <div className="screen-loading">Cargando tu espacio…</div>;
   if (!user) return <Navigate to="/login" replace />;
@@ -34,6 +42,9 @@ function ProtectedLayout() {
       <div className="screen-loading">
         <strong>Perfil no configurado</strong>
         <span>Solicita al administrador crear tu perfil en Supabase.</span>
+        <Button variant="secondary" onClick={() => void returnToLogin()}>
+          Volver al login
+        </Button>
       </div>
     );
   if (!profile.active)
@@ -41,6 +52,9 @@ function ProtectedLayout() {
       <div className="screen-loading">
         <strong>Acceso desactivado</strong>
         <span>Solicita al administrador que reactive tu cuenta.</span>
+        <Button variant="secondary" onClick={() => void returnToLogin()}>
+          Volver al login
+        </Button>
       </div>
     );
   return (
