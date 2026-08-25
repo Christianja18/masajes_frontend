@@ -24,15 +24,24 @@ import {
   Pagination,
   IconButton,
 } from "../../shared/ui";
-async function getBookings(): Promise<Booking[]> {
-  const { data, error } = await supabase
+async function getBookings(page: number, pageSize: number, search: string) {
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+  let query = supabase
     .from("bookings")
     .select(
       "id, customer_id, therapist_id, service_id, guest_name, guest_phone, starts_at, ends_at, status, location_type, address, address_reference, customer:customers(full_name), therapist:therapists(full_name), service:services(name, duration_minutes, price)",
+      { count: "exact" },
     )
-    .order("starts_at", { ascending: false });
+    .order("starts_at", { ascending: false })
+    .range(from, to);
+  if (search)
+    query = query.or(
+      `guest_name.ilike.%${search}%,guest_phone.ilike.%${search}%`,
+    );
+  const { data, count, error } = await query;
   if (error) throw error;
-  return (data ?? []) as unknown as Booking[];
+  return { rows: (data ?? []) as unknown as Booking[], total: count ?? 0 };
 }
 const statusTone = {
   pending: "warning",
@@ -156,23 +165,13 @@ export function BookingsPage() {
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     }
   };
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["bookings"],
-    queryFn: getBookings,
-  });
-  const filtered = (data ?? []).filter(
-    (row) =>
-      (row.customer?.full_name || row.guest_name || "")
-        .toLowerCase()
-        .includes(search.toLowerCase()) ||
-      (row.service?.name || "").toLowerCase().includes(search.toLowerCase()),
-  );
   const pageSize = 10;
-  const pageCount = Math.ceil(filtered.length / pageSize);
-  const visibleBookings = filtered.slice(
-    (page - 1) * pageSize,
-    page * pageSize,
-  );
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["bookings", page, search],
+    queryFn: () => getBookings(page, pageSize, search.trim()),
+  });
+  const bookings = data?.rows ?? [];
+  const pageCount = Math.ceil((data?.total ?? 0) / pageSize);
   return (
     <>
       <div className="page-heading">
@@ -205,7 +204,7 @@ export function BookingsPage() {
       {error && <ErrorMessage message="No pudimos cargar las reservas." />}
       {isLoading ? (
         <div className="table-loading">Cargando agenda…</div>
-      ) : filtered.length === 0 ? (
+      ) : bookings.length === 0 ? (
         <Card>
           <EmptyState
             title="No hay reservas"
@@ -228,7 +227,7 @@ export function BookingsPage() {
                 </tr>
               </thead>
               <tbody>
-                {visibleBookings.map((booking) => (
+                {bookings.map((booking) => (
                   <tr key={booking.id}>
                     <td>
                       <strong>{formatDate(booking.starts_at)}</strong>

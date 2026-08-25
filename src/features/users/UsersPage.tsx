@@ -20,23 +20,29 @@ import {
 
 const roles: UserRole[] = ["admin", "manager", "receptionist", "therapist"];
 
-async function getStaff(): Promise<StaffProfile[]> {
-  const { data, error } = await supabase.rpc("list_staff_profiles");
+async function getStaff(page: number, pageSize: number) {
+  const { data, error } = await supabase.rpc("list_staff_profiles", {
+    p_page: page,
+    p_page_size: pageSize,
+  });
   if (error) throw error;
-  return (data ?? []) as StaffProfile[];
+  const rows = (data ?? []) as (StaffProfile & { total_count: number })[];
+  return {
+    rows,
+    total: Number(rows[0]?.total_count ?? 0),
+  };
 }
 
 export function UsersPage() {
   const [editing, setEditing] = useState<StaffProfile | null>(null);
   const [page, setPage] = useState(1);
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["staff-profiles"],
-    queryFn: getStaff,
-  });
-  const staff = data ?? [];
   const pageSize = 10;
-  const pageCount = Math.ceil(staff.length / pageSize);
-  const visibleStaff = staff.slice((page - 1) * pageSize, page * pageSize);
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["staff-profiles", page],
+    queryFn: () => getStaff(page, pageSize),
+  });
+  const staff = data?.rows ?? [];
+  const pageCount = Math.ceil((data?.total ?? 0) / pageSize);
 
   return (
     <>
@@ -73,7 +79,7 @@ export function UsersPage() {
                 </tr>
               </thead>
               <tbody>
-                {visibleStaff.map((member) => (
+                {staff.map((member) => (
                   <tr key={member.id}>
                     <td>
                       <span className="inline-icon">

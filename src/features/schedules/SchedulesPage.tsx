@@ -40,16 +40,18 @@ const days = [
   "Viernes",
   "Sábado",
 ];
-async function getSchedules(): Promise<Schedule[]> {
-  const { data, error } = await supabase
+async function getSchedules(page: number, pageSize: number) {
+  const { data, count, error } = await supabase
     .from("therapist_schedules")
     .select(
       "id, therapist_id, weekday, start_time, end_time, active, therapist:therapists(full_name)",
+      { count: "exact" },
     )
     .order("weekday")
-    .order("start_time");
+    .order("start_time")
+    .range((page - 1) * pageSize, page * pageSize - 1);
   if (error) throw error;
-  return (data ?? []) as unknown as Schedule[];
+  return { rows: (data ?? []) as unknown as Schedule[], total: count ?? 0 };
 }
 async function getTherapists(): Promise<Therapist[]> {
   const { data, error } = await supabase
@@ -60,15 +62,20 @@ async function getTherapists(): Promise<Therapist[]> {
   if (error) throw error;
   return (data ?? []) as Therapist[];
 }
-async function getBlocks(): Promise<ScheduleBlock[]> {
-  const { data, error } = await supabase
+async function getBlocks(page: number, pageSize: number) {
+  const { data, count, error } = await supabase
     .from("therapist_schedule_blocks")
     .select(
       "id, therapist_id, starts_at, ends_at, reason, therapist:therapists(full_name)",
+      { count: "exact" },
     )
-    .order("starts_at", { ascending: false });
+    .order("starts_at", { ascending: false })
+    .range((page - 1) * pageSize, page * pageSize - 1);
   if (error) throw error;
-  return (data ?? []) as unknown as ScheduleBlock[];
+  return {
+    rows: (data ?? []) as unknown as ScheduleBlock[],
+    total: count ?? 0,
+  };
 }
 const scheduleSchema = z
   .object({
@@ -87,15 +94,18 @@ export function SchedulesPage() {
   const [open, setOpen] = useState(false);
   const [blockOpen, setBlockOpen] = useState(false);
   const [page, setPage] = useState(1);
+  const [blockPage, setBlockPage] = useState(1);
+  const pageSize = 10;
   const { data, isLoading, error } = useQuery({
-    queryKey: ["schedules"],
-    queryFn: getSchedules,
+    queryKey: ["schedules", page],
+    queryFn: () => getSchedules(page, pageSize),
   });
   const blocksQuery = useQuery({
-    queryKey: ["schedule-blocks"],
-    queryFn: getBlocks,
+    queryKey: ["schedule-blocks", blockPage],
+    queryFn: () => getBlocks(blockPage, pageSize),
   });
-  const visibleSchedules = (data ?? []).slice((page - 1) * 10, page * 10);
+  const schedules = data?.rows ?? [];
+  const blocks = blocksQuery.data?.rows ?? [];
   return (
     <>
       <div className="page-heading">
@@ -116,7 +126,7 @@ export function SchedulesPage() {
       {error && <ErrorMessage message="No pudimos cargar los horarios." />}
       {isLoading ? (
         <div className="table-loading">Cargando horarios…</div>
-      ) : data?.length ? (
+      ) : schedules.length ? (
         <Card className="table-card">
           <div className="responsive-table">
             <table>
@@ -129,7 +139,7 @@ export function SchedulesPage() {
                 </tr>
               </thead>
               <tbody>
-                {visibleSchedules.map((schedule) => (
+                {schedules.map((schedule) => (
                   <tr key={schedule.id}>
                     <td>
                       <strong>{days[schedule.weekday]}</strong>
@@ -153,7 +163,7 @@ export function SchedulesPage() {
           </div>
           <Pagination
             page={page}
-            pageCount={Math.ceil((data?.length ?? 0) / 10)}
+            pageCount={Math.ceil((data?.total ?? 0) / pageSize)}
             onPageChange={setPage}
           />
         </Card>
@@ -175,7 +185,7 @@ export function SchedulesPage() {
               <h3>Bloqueos próximos</h3>
             </div>
           </div>
-          {blocksQuery.data.length ? (
+          {blocks.length ? (
             <div className="responsive-table">
               <table>
                 <thead>
@@ -187,7 +197,7 @@ export function SchedulesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {blocksQuery.data.map((block) => (
+                  {blocks.map((block) => (
                     <tr key={block.id}>
                       <td>{block.therapist?.full_name || "—"}</td>
                       <td>
@@ -216,6 +226,11 @@ export function SchedulesPage() {
               text="Vacaciones, permisos y ausencias aparecerán aquí."
             />
           )}
+          <Pagination
+            page={blockPage}
+            pageCount={Math.ceil((blocksQuery.data?.total ?? 0) / pageSize)}
+            onPageChange={setBlockPage}
+          />
         </Card>
       )}
     </>

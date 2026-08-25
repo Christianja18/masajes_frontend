@@ -15,23 +15,36 @@ import {
   ErrorMessage,
   formatCurrency,
   IconButton,
+  Pagination,
 } from "../../shared/ui";
-async function getCatalog() {
+async function getCatalog(
+  servicePage: number,
+  therapistPage: number,
+  pageSize: number,
+) {
+  const serviceFrom = (servicePage - 1) * pageSize;
+  const therapistFrom = (therapistPage - 1) * pageSize;
   const [services, therapists] = await Promise.all([
     supabase
       .from("services")
-      .select("id, name, duration_minutes, price, active")
-      .order("name"),
+      .select("id, name, duration_minutes, price, active", {
+        count: "exact",
+      })
+      .order("name")
+      .range(serviceFrom, serviceFrom + pageSize - 1),
     supabase
       .from("therapists")
-      .select("id, full_name, phone, active")
-      .order("full_name"),
+      .select("id, full_name, phone, active", { count: "exact" })
+      .order("full_name")
+      .range(therapistFrom, therapistFrom + pageSize - 1),
   ]);
   if (services.error) throw services.error;
   if (therapists.error) throw therapists.error;
   return {
     services: (services.data ?? []) as Service[],
     therapists: (therapists.data ?? []) as Therapist[],
+    servicesTotal: services.count ?? 0,
+    therapistsTotal: therapists.count ?? 0,
   };
 }
 export function CatalogPage() {
@@ -40,6 +53,8 @@ export function CatalogPage() {
   const [editingTherapist, setEditingTherapist] = useState<Therapist | null>(
     null,
   );
+  const [servicePage, setServicePage] = useState(1);
+  const [therapistPage, setTherapistPage] = useState(1);
   const queryClient = useQueryClient();
   const deactivate = async (table: "services" | "therapists", id: string) => {
     if (!window.confirm("¿Desactivar este registro?")) return;
@@ -50,10 +65,13 @@ export function CatalogPage() {
     if (!updateError)
       void queryClient.invalidateQueries({ queryKey: ["catalog"] });
   };
+  const pageSize = 6;
   const { data, isLoading, error } = useQuery({
-    queryKey: ["catalog"],
-    queryFn: getCatalog,
+    queryKey: ["catalog", servicePage, therapistPage],
+    queryFn: () => getCatalog(servicePage, therapistPage, pageSize),
   });
+  const visibleServices = data?.services ?? [];
+  const visibleTherapists = data?.therapists ?? [];
   return (
     <>
       <div className="page-heading">
@@ -89,7 +107,7 @@ export function CatalogPage() {
             </div>
             {data?.services.length ? (
               <div className="catalog-list">
-                {data.services.map((service) => (
+                {visibleServices.map((service) => (
                   <div className="catalog-row" key={service.id}>
                     <div className="service-dot">
                       <Sparkles size={16} />
@@ -128,6 +146,11 @@ export function CatalogPage() {
                 text="Agrega el primer servicio del centro."
               />
             )}
+            <Pagination
+              page={servicePage}
+              pageCount={Math.ceil((data?.servicesTotal ?? 0) / pageSize)}
+              onPageChange={setServicePage}
+            />
           </Card>
           <Card>
             <div className="card-heading">
@@ -139,7 +162,7 @@ export function CatalogPage() {
             </div>
             {data?.therapists.length ? (
               <div className="catalog-list">
-                {data.therapists.map((therapist) => (
+                {visibleTherapists.map((therapist) => (
                   <div className="catalog-row" key={therapist.id}>
                     <div className="avatar avatar-purple">
                       {therapist.full_name.slice(0, 1)}
@@ -177,6 +200,11 @@ export function CatalogPage() {
                 text="Agrega el equipo para organizar horarios."
               />
             )}
+            <Pagination
+              page={therapistPage}
+              pageCount={Math.ceil((data?.therapistsTotal ?? 0) / pageSize)}
+              onPageChange={setTherapistPage}
+            />
           </Card>
         </div>
       )}
@@ -241,13 +269,11 @@ function ServiceForm({
               price: values.price,
             })
             .eq("id", service.id)
-        : supabase
-            .from("services")
-            .insert({
-              name: values.name,
-              duration_minutes: values.duration,
-              price: values.price,
-            });
+        : supabase.from("services").insert({
+            name: values.name,
+            duration_minutes: values.duration,
+            price: values.price,
+          });
       const { error: insertError } = await query;
       if (insertError) throw insertError;
     },
@@ -337,13 +363,11 @@ function TherapistForm({
               description: values.description || null,
             })
             .eq("id", therapist.id)
-        : supabase
-            .from("therapists")
-            .insert({
-              full_name: values.name,
-              phone: values.phone || null,
-              description: values.description || null,
-            });
+        : supabase.from("therapists").insert({
+            full_name: values.name,
+            phone: values.phone || null,
+            description: values.description || null,
+          });
       const { error: insertError } = await query;
       if (insertError) throw insertError;
     },

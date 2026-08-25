@@ -23,14 +23,16 @@ interface SaleRow {
   created_at: string;
   customer: { full_name: string } | null;
 }
-async function getSales(): Promise<SaleRow[]> {
-  const { data, error } = await supabase
+async function getSales(page: number, pageSize: number) {
+  const { data, count, error } = await supabase
     .from("sales")
-    .select("id, total, discount, created_at, customer:customers(full_name)")
+    .select("id, total, discount, created_at, customer:customers(full_name)", {
+      count: "exact",
+    })
     .order("created_at", { ascending: false })
-    .limit(30);
+    .range((page - 1) * pageSize, page * pageSize - 1);
   if (error) throw error;
-  return (data ?? []) as unknown as SaleRow[];
+  return { rows: (data ?? []) as unknown as SaleRow[], total: count ?? 0 };
 }
 async function getSaleOptions() {
   const [services, customers] = await Promise.all([
@@ -71,16 +73,13 @@ type SaleInput = z.input<typeof saleSchema>;
 export function SalesPage() {
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(1);
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["sales"],
-    queryFn: getSales,
-  });
   const pageSize = 10;
-  const pageCount = Math.ceil((data?.length ?? 0) / pageSize);
-  const visibleSales = (data ?? []).slice(
-    (page - 1) * pageSize,
-    page * pageSize,
-  );
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["sales", page],
+    queryFn: () => getSales(page, pageSize),
+  });
+  const sales = data?.rows ?? [];
+  const pageCount = Math.ceil((data?.total ?? 0) / pageSize);
   return (
     <>
       <div className="page-heading">
@@ -96,7 +95,7 @@ export function SalesPage() {
       {error && <ErrorMessage message="No pudimos cargar las ventas." />}
       {isLoading ? (
         <div className="table-loading">Cargando ventas…</div>
-      ) : data?.length ? (
+      ) : sales.length ? (
         <Card className="table-card">
           <div className="responsive-table">
             <table>
@@ -110,7 +109,7 @@ export function SalesPage() {
                 </tr>
               </thead>
               <tbody>
-                {visibleSales.map((sale) => (
+                {sales.map((sale) => (
                   <tr key={sale.id}>
                     <td>
                       {new Intl.DateTimeFormat("es-PE", {

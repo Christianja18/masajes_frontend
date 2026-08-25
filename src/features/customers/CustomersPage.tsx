@@ -14,13 +14,19 @@ import {
   IconButton,
   Pagination,
 } from "../../shared/ui";
-async function getCustomers(): Promise<Customer[]> {
-  const { data, error } = await supabase
+async function getCustomers(page: number, pageSize: number, search: string) {
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+  let query = supabase
     .from("customers")
-    .select("id, full_name, phone, email, active")
-    .order("full_name");
+    .select("id, full_name, phone, email, active", { count: "exact" })
+    .order("full_name")
+    .range(from, to);
+  if (search)
+    query = query.or(`full_name.ilike.%${search}%,phone.ilike.%${search}%`);
+  const { data, count, error } = await query;
   if (error) throw error;
-  return (data ?? []) as Customer[];
+  return { rows: (data ?? []) as Customer[], total: count ?? 0 };
 }
 export function CustomersPage() {
   const queryClient = useQueryClient();
@@ -28,21 +34,13 @@ export function CustomersPage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [page, setPage] = useState(1);
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["customers"],
-    queryFn: getCustomers,
-  });
-  const customers = (data ?? []).filter(
-    (c) =>
-      c.full_name.toLowerCase().includes(search.toLowerCase()) ||
-      (c.phone || "").includes(search),
-  );
   const pageSize = 10;
-  const pageCount = Math.ceil(customers.length / pageSize);
-  const visibleCustomers = customers.slice(
-    (page - 1) * pageSize,
-    page * pageSize,
-  );
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["customers", page, search],
+    queryFn: () => getCustomers(page, pageSize, search.trim()),
+  });
+  const customers = data?.rows ?? [];
+  const pageCount = Math.ceil((data?.total ?? 0) / pageSize);
   const deactivateCustomer = async (id: string) => {
     if (!window.confirm("¿Desactivar este cliente?")) return;
     const { error: updateError } = await supabase
@@ -105,7 +103,7 @@ export function CustomersPage() {
                 </tr>
               </thead>
               <tbody>
-                {visibleCustomers.map((customer) => (
+                {customers.map((customer) => (
                   <tr key={customer.id}>
                     <td>
                       <span className="inline-icon">
@@ -203,14 +201,12 @@ function CustomerForm({
               notes: values.notes || null,
             })
             .eq("id", customer.id)
-        : supabase
-            .from("customers")
-            .insert({
-              full_name: values.fullName,
-              phone: values.phone,
-              email: values.email || null,
-              notes: values.notes || null,
-            });
+        : supabase.from("customers").insert({
+            full_name: values.fullName,
+            phone: values.phone,
+            email: values.email || null,
+            notes: values.notes || null,
+          });
       const { error } = await query;
       if (error) throw error;
     },

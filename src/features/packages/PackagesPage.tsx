@@ -24,13 +24,16 @@ interface PackageRow {
   validity_days: number | null;
   active: boolean;
 }
-async function getPackages(): Promise<PackageRow[]> {
-  const { data, error } = await supabase
+async function getPackages(page: number, pageSize: number) {
+  const { data, count, error } = await supabase
     .from("packages")
-    .select("id, name, description, price, validity_days, active")
-    .order("name");
+    .select("id, name, description, price, validity_days, active", {
+      count: "exact",
+    })
+    .order("name")
+    .range((page - 1) * pageSize, page * pageSize - 1);
   if (error) throw error;
-  return (data ?? []) as PackageRow[];
+  return { rows: (data ?? []) as PackageRow[], total: count ?? 0 };
 }
 const packageSchema = z
   .object({
@@ -63,6 +66,7 @@ export function PackagesPage() {
   const [open, setOpen] = useState(false);
   const [purchase, setPurchase] = useState<PackageRow | null>(null);
   const [page, setPage] = useState(1);
+  const pageSize = 8;
   const queryClient = useQueryClient();
   const deactivate = async (id: string) => {
     if (!window.confirm("¿Desactivar este paquete?")) return;
@@ -74,9 +78,10 @@ export function PackagesPage() {
       void queryClient.invalidateQueries({ queryKey: ["packages"] });
   };
   const { data, isLoading, error } = useQuery({
-    queryKey: ["packages"],
-    queryFn: getPackages,
+    queryKey: ["packages", page],
+    queryFn: () => getPackages(page, pageSize),
   });
+  const packages = data?.rows ?? [];
   return (
     <>
       <div className="page-heading">
@@ -92,9 +97,9 @@ export function PackagesPage() {
       {error && <ErrorMessage message="No pudimos cargar los paquetes." />}
       {isLoading ? (
         <div className="table-loading">Cargando paquetes…</div>
-      ) : data?.length ? (
+      ) : packages.length ? (
         <div className="catalog-grid">
-          {data.slice((page - 1) * 8, page * 8).map((item) => (
+          {packages.map((item) => (
             <Card key={item.id}>
               <div className="card-heading">
                 <div className="service-dot">
@@ -131,7 +136,7 @@ export function PackagesPage() {
           ))}
           <Pagination
             page={page}
-            pageCount={Math.ceil(data.length / 8)}
+            pageCount={Math.ceil((data?.total ?? 0) / pageSize)}
             onPageChange={setPage}
           />
         </div>

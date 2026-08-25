@@ -19,7 +19,9 @@ import {
   formatCurrency,
   Pagination,
 } from "../../shared/ui";
-async function getCash() {
+async function getCash(page: number, pageSize: number) {
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
   const [register, movements] = await Promise.all([
     supabase
       .from("cash_registers")
@@ -28,15 +30,18 @@ async function getCash() {
       .maybeSingle(),
     supabase
       .from("cash_movements")
-      .select("id, movement_type, category, amount, description, created_at")
+      .select("id, movement_type, category, amount, description, created_at", {
+        count: "exact",
+      })
       .order("created_at", { ascending: false })
-      .limit(20),
+      .range(from, to),
   ]);
   if (register.error) throw register.error;
   if (movements.error) throw movements.error;
   return {
     register: register.data as CashRegister | null,
     movements: (movements.data ?? []) as CashMovement[],
+    totalMovements: movements.count ?? 0,
   };
 }
 export function CashPage() {
@@ -44,9 +49,10 @@ export function CashPage() {
     "open" | "close" | "movement" | "mobility" | null
   >(null);
   const [page, setPage] = useState(1);
+  const pageSize = 10;
   const { data, isLoading, error } = useQuery({
-    queryKey: ["cash"],
-    queryFn: getCash,
+    queryKey: ["cash", page],
+    queryFn: () => getCash(page, pageSize),
   });
   const income =
     data?.movements
@@ -56,10 +62,6 @@ export function CashPage() {
     data?.movements
       .filter((m) => m.movement_type === "expense")
       .reduce((s, m) => s + Number(m.amount), 0) ?? 0;
-  const visibleMovements = (data?.movements ?? []).slice(
-    (page - 1) * 10,
-    page * 10,
-  );
   return (
     <>
       <div className="page-heading">
@@ -154,7 +156,7 @@ export function CashPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {visibleMovements.map((movement) => (
+                    {(data?.movements ?? []).map((movement) => (
                       <tr key={movement.id}>
                         <td>
                           <Badge
@@ -208,7 +210,7 @@ export function CashPage() {
             )}
             <Pagination
               page={page}
-              pageCount={Math.ceil((data?.movements.length ?? 0) / 10)}
+              pageCount={Math.ceil((data?.totalMovements ?? 0) / pageSize)}
               onPageChange={setPage}
             />
           </Card>

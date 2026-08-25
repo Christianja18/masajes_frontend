@@ -26,15 +26,17 @@ interface Promotion {
   ends_at: string | null;
   active: boolean;
 }
-async function getPromotions(): Promise<Promotion[]> {
-  const { data, error } = await supabase
+async function getPromotions(page: number, pageSize: number) {
+  const { data, count, error } = await supabase
     .from("promotions")
     .select(
       "id, name, description, discount_type, discount_value, starts_at, ends_at, active",
+      { count: "exact" },
     )
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .range((page - 1) * pageSize, page * pageSize - 1);
   if (error) throw error;
-  return (data ?? []) as Promotion[];
+  return { rows: (data ?? []) as Promotion[], total: count ?? 0 };
 }
 const promotionSchema = z.object({
   name: z.string().trim().min(2, "Ingresa un nombre"),
@@ -49,6 +51,7 @@ type PromotionInput = z.input<typeof promotionSchema>;
 export function PromotionsPage() {
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(1);
+  const pageSize = 8;
   const queryClient = useQueryClient();
   const deactivate = async (id: string) => {
     if (!window.confirm("¿Desactivar esta promoción?")) return;
@@ -60,9 +63,10 @@ export function PromotionsPage() {
       void queryClient.invalidateQueries({ queryKey: ["promotions"] });
   };
   const { data, isLoading, error } = useQuery({
-    queryKey: ["promotions"],
-    queryFn: getPromotions,
+    queryKey: ["promotions", page],
+    queryFn: () => getPromotions(page, pageSize),
   });
+  const promotions = data?.rows ?? [];
   return (
     <>
       <div className="page-heading">
@@ -78,9 +82,9 @@ export function PromotionsPage() {
       {error && <ErrorMessage message="No pudimos cargar las promociones." />}
       {isLoading ? (
         <div className="table-loading">Cargando promociones…</div>
-      ) : data?.length ? (
+      ) : promotions.length ? (
         <div className="catalog-grid">
-          {data.slice((page - 1) * 8, page * 8).map((promotion) => (
+          {promotions.map((promotion) => (
             <Card key={promotion.id}>
               <div className="card-heading">
                 <div className="service-dot">
@@ -115,7 +119,7 @@ export function PromotionsPage() {
           ))}
           <Pagination
             page={page}
-            pageCount={Math.ceil(data.length / 8)}
+            pageCount={Math.ceil((data?.total ?? 0) / pageSize)}
             onPageChange={setPage}
           />
         </div>
