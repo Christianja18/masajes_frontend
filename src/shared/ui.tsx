@@ -73,7 +73,7 @@ export function Pagination({
   pageCount: number;
   onPageChange: (page: number) => void;
 }) {
-  if (pageCount <= 1) return null;
+  if (pageCount <= 0) return null;
   return (
     <nav className="pagination" aria-label="Paginación">
       <button
