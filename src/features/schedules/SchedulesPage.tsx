@@ -95,7 +95,7 @@ export function SchedulesPage() {
   const [blockOpen, setBlockOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [blockPage, setBlockPage] = useState(1);
-  const pageSize = 10;
+  const pageSize = 6;
   const { data, isLoading, error } = useQuery({
     queryKey: ["schedules", page],
     queryFn: () => getSchedules(page, pageSize),

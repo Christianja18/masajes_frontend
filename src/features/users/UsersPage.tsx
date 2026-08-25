@@ -36,7 +36,7 @@ async function getStaff(page: number, pageSize: number) {
 export function UsersPage() {
   const [editing, setEditing] = useState<StaffProfile | null>(null);
   const [page, setPage] = useState(1);
-  const pageSize = 10;
+  const pageSize = 6;
   const { data, isLoading, error } = useQuery({
     queryKey: ["staff-profiles", page],
     queryFn: () => getStaff(page, pageSize),

@@ -73,7 +73,7 @@ type SaleInput = z.input<typeof saleSchema>;
 export function SalesPage() {
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(1);
-  const pageSize = 10;
+  const pageSize = 6;
   const { data, isLoading, error } = useQuery({
     queryKey: ["sales", page],
     queryFn: () => getSales(page, pageSize),

@@ -66,7 +66,7 @@ export function PackagesPage() {
   const [open, setOpen] = useState(false);
   const [purchase, setPurchase] = useState<PackageRow | null>(null);
   const [page, setPage] = useState(1);
-  const pageSize = 8;
+  const pageSize = 6;
   const queryClient = useQueryClient();
   const deactivate = async (id: string) => {
     if (!window.confirm("¿Desactivar este paquete?")) return;

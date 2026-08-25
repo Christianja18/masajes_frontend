@@ -49,7 +49,7 @@ export function CashPage() {
     "open" | "close" | "movement" | "mobility" | null
   >(null);
   const [page, setPage] = useState(1);
-  const pageSize = 10;
+  const pageSize = 6;
   const { data, isLoading, error } = useQuery({
     queryKey: ["cash", page],
     queryFn: () => getCash(page, pageSize),

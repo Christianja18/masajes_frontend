@@ -165,7 +165,7 @@ export function BookingsPage() {
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     }
   };
-  const pageSize = 10;
+  const pageSize = 6;
   const { data, isLoading, error } = useQuery({
     queryKey: ["bookings", page, search],
     queryFn: () => getBookings(page, pageSize, search.trim()),

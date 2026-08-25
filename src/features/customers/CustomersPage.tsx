@@ -34,7 +34,7 @@ export function CustomersPage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [page, setPage] = useState(1);
-  const pageSize = 10;
+  const pageSize = 6;
   const { data, isLoading, error } = useQuery({
     queryKey: ["customers", page, search],
     queryFn: () => getCustomers(page, pageSize, search.trim()),

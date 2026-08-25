@@ -51,7 +51,7 @@ type PromotionInput = z.input<typeof promotionSchema>;
 export function PromotionsPage() {
   const [open, setOpen] = useState(false);
   const [page, setPage] = useState(1);
-  const pageSize = 8;
+  const pageSize = 6;
   const queryClient = useQueryClient();
   const deactivate = async (id: string) => {
     if (!window.confirm("¿Desactivar esta promoción?")) return;
