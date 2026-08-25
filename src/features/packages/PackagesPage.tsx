@@ -25,6 +25,16 @@ interface PackageRow {
   validity_days: number | null;
   active: boolean;
 }
+interface CustomerPackageRow {
+  id: string;
+  customer_id: string;
+  total_sessions: number;
+  used_sessions: number;
+  expires_at: string | null;
+  active: boolean;
+  customer: { full_name: string } | null;
+  package: { name: string } | null;
+}
 async function getPackages(page: number, pageSize: number) {
   const { data, count, error } = await supabase
     .from("packages")
@@ -35,6 +45,21 @@ async function getPackages(page: number, pageSize: number) {
     .range((page - 1) * pageSize, page * pageSize - 1);
   if (error) throw error;
   return { rows: (data ?? []) as PackageRow[], total: count ?? 0 };
+}
+async function getCustomerPackages(page: number, pageSize: number) {
+  const { data, count, error } = await supabase
+    .from("customer_packages")
+    .select(
+      "id, customer_id, total_sessions, used_sessions, expires_at, active, customer:customers(full_name), package:packages(name)",
+      { count: "exact" },
+    )
+    .order("purchased_at", { ascending: false })
+    .range((page - 1) * pageSize, page * pageSize - 1);
+  if (error) throw error;
+  return {
+    rows: (data ?? []) as unknown as CustomerPackageRow[],
+    total: count ?? 0,
+  };
 }
 const packageSchema = z
   .object({
@@ -67,6 +92,7 @@ export function PackagesPage() {
   const [open, setOpen] = useState(false);
   const [purchase, setPurchase] = useState<PackageRow | null>(null);
   const [page, setPage] = useState(1);
+  const [assignmentPage, setAssignmentPage] = useState(1);
   const pageSize = 6;
   const queryClient = useQueryClient();
   const deactivate = async (id: string) => {
@@ -83,6 +109,10 @@ export function PackagesPage() {
     queryFn: () => getPackages(page, pageSize),
   });
   const packages = data?.rows ?? [];
+  const { data: assignments, isLoading: assignmentsLoading } = useQuery({
+    queryKey: ["customer-packages", assignmentPage],
+    queryFn: () => getCustomerPackages(assignmentPage, pageSize),
+  });
   return (
     <>
       <div className="page-heading">
@@ -149,6 +179,69 @@ export function PackagesPage() {
           />
         </Card>
       )}
+      <Card className="table-card">
+        <div className="card-heading">
+          <div>
+            <span className="eyebrow">SEGUIMIENTO</span>
+            <h2>Paquetes asignados</h2>
+          </div>
+        </div>
+        {assignmentsLoading ? (
+          <div className="table-loading">Cargando asignaciones…</div>
+        ) : assignments?.rows.length ? (
+          <>
+            <div className="responsive-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Cliente</th>
+                    <th>Paquete</th>
+                    <th>Sesiones</th>
+                    <th>Vigencia</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {assignments.rows.map((assignment) => (
+                    <tr key={assignment.id}>
+                      <td>{assignment.customer?.full_name ?? "—"}</td>
+                      <td>{assignment.package?.name ?? "—"}</td>
+                      <td>
+                        {assignment.used_sessions} usadas /{" "}
+                        {assignment.total_sessions - assignment.used_sessions}{" "}
+                        disponibles
+                      </td>
+                      <td>
+                        {assignment.expires_at
+                          ? new Intl.DateTimeFormat("es-PE", {
+                              dateStyle: "medium",
+                              timeZone: "America/Lima",
+                            }).format(new Date(assignment.expires_at))
+                          : "Sin vencimiento"}
+                      </td>
+                      <td>
+                        <Badge tone={assignment.active ? "success" : "neutral"}>
+                          {assignment.active ? "Disponible" : "Agotado"}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Pagination
+              page={assignmentPage}
+              pageCount={Math.ceil((assignments.total ?? 0) / pageSize)}
+              onPageChange={setAssignmentPage}
+            />
+          </>
+        ) : (
+          <EmptyState
+            title="Sin paquetes asignados"
+            text="Al asignar un paquete a un cliente aparecerá aquí."
+          />
+        )}
+      </Card>
       {open && <PackageForm onClose={() => setOpen(false)} />}
       {purchase && (
         <PurchasePackageForm
@@ -212,6 +305,7 @@ function PackageForm({ onClose }: { onClose: () => void }) {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["packages"] });
+      void queryClient.invalidateQueries({ queryKey: ["customer-packages"] });
       onClose();
     },
     onError: () =>

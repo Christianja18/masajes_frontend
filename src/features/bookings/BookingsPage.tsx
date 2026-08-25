@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CalendarDays,
   Ban,
+  CheckCircle2,
   MapPin,
   Search,
   SlidersHorizontal,
@@ -31,7 +32,7 @@ async function getBookings(page: number, pageSize: number, search: string) {
   let query = supabase
     .from("bookings")
     .select(
-      "id, customer_id, therapist_id, service_id, guest_name, guest_phone, starts_at, ends_at, status, location_type, address, address_reference, customer:customers(full_name), therapist:therapists(full_name), service:services(name, duration_minutes, price)",
+      "id, customer_id, therapist_id, service_id, customer_package_id, guest_name, guest_phone, starts_at, ends_at, status, location_type, address, address_reference, customer:customers(full_name), therapist:therapists(full_name), service:services(name, duration_minutes, price), customer_package:customer_packages(package:packages(name))",
       { count: "exact" },
     )
     .order("starts_at", { ascending: false })
@@ -64,6 +65,7 @@ const bookingSchema = z
   .object({
     customerMode: z.enum(["guest", "registered"]),
     customerId: z.string(),
+    customerPackageId: z.string(),
     guestName: z.string(),
     guestPhone: z.string(),
     guestEmail: z.string(),
@@ -107,30 +109,52 @@ const bookingSchema = z
 type BookingFormValues = z.infer<typeof bookingSchema>;
 
 async function getFormOptions() {
-  const [services, therapists, customers] = await Promise.all([
-    supabase
-      .from("services")
-      .select("id, name, duration_minutes, price, active")
-      .eq("active", true)
-      .order("name"),
-    supabase
-      .from("therapists")
-      .select("id, full_name, phone, active")
-      .eq("active", true)
-      .order("full_name"),
-    supabase
-      .from("customers")
-      .select("id, full_name, phone, email, active")
-      .eq("active", true)
-      .order("full_name"),
-  ]);
+  const [services, therapists, customers, customerPackages] = await Promise.all(
+    [
+      supabase
+        .from("services")
+        .select("id, name, duration_minutes, price, active")
+        .eq("active", true)
+        .order("name"),
+      supabase
+        .from("therapists")
+        .select("id, full_name, phone, active")
+        .eq("active", true)
+        .order("full_name"),
+      supabase
+        .from("customers")
+        .select("id, full_name, phone, email, active")
+        .eq("active", true)
+        .order("full_name"),
+      supabase
+        .from("customer_packages")
+        .select(
+          "id, customer_id, total_sessions, used_sessions, expires_at, active, package:packages(name, package_items(service_id))",
+        )
+        .eq("active", true)
+        .order("expires_at", { ascending: true, nullsFirst: false }),
+    ],
+  );
   if (services.error) throw services.error;
   if (therapists.error) throw therapists.error;
   if (customers.error) throw customers.error;
+  if (customerPackages.error) throw customerPackages.error;
   return {
     services: (services.data ?? []) as Service[],
     therapists: (therapists.data ?? []) as Therapist[],
     customers: (customers.data ?? []) as Customer[],
+    customerPackages: (customerPackages.data ?? []) as Array<{
+      id: string;
+      customer_id: string;
+      total_sessions: number;
+      used_sessions: number;
+      expires_at: string | null;
+      active: boolean;
+      package: Array<{
+        name: string;
+        package_items: Array<{ service_id: string }>;
+      }>;
+    }>,
   };
 }
 
@@ -164,6 +188,18 @@ export function BookingsPage() {
     if (!updateError) {
       void queryClient.invalidateQueries({ queryKey: ["bookings"] });
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    }
+  };
+  const completeBooking = async (id: string) => {
+    const { error: updateError } = await supabase
+      .from("bookings")
+      .update({ status: "completed" })
+      .eq("id", id)
+      .in("status", ["pending", "confirmed", "in_progress"]);
+    if (!updateError) {
+      void queryClient.invalidateQueries({ queryKey: ["bookings"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      void queryClient.invalidateQueries({ queryKey: ["customer-packages"] });
     }
   };
   const pageSize = 6;
@@ -221,6 +257,7 @@ export function BookingsPage() {
                   <th>Fecha y hora</th>
                   <th>Cliente</th>
                   <th>Servicio</th>
+                  <th>Paquete</th>
                   <th>Masajista</th>
                   <th>Ubicación</th>
                   <th>Estado</th>
@@ -234,6 +271,16 @@ export function BookingsPage() {
                       <strong>{formatDate(booking.starts_at)}</strong>
                     </td>
                     <td>
+                      <IconButton
+                        label="Marcar como completada"
+                        disabled={
+                          booking.status === "cancelled" ||
+                          booking.status === "completed"
+                        }
+                        onClick={() => void completeBooking(booking.id)}
+                      >
+                        <CheckCircle2 size={15} />
+                      </IconButton>
                       <IconButton
                         label="Cancelar reserva"
                         variant="danger"
@@ -257,6 +304,7 @@ export function BookingsPage() {
                       </small>
                     </td>
                     <td>{booking.service?.name || "—"}</td>
+                    <td>{booking.customer_package?.package?.name || "—"}</td>
                     <td>{booking.therapist?.full_name || "—"}</td>
                     <td>
                       {booking.location_type === "customer_home" ? (
@@ -309,6 +357,7 @@ function BookingForm({ onClose }: { onClose: () => void }) {
     defaultValues: {
       customerMode: "guest",
       customerId: "",
+      customerPackageId: "",
       guestName: "",
       guestPhone: "",
       guestEmail: "",
@@ -323,6 +372,8 @@ function BookingForm({ onClose }: { onClose: () => void }) {
   });
   const mode = watch("customerMode");
   const location = watch("locationType");
+  const customerId = watch("customerId");
+  const serviceId = watch("serviceId");
   const mutation = useMutation({
     mutationFn: async (values: BookingFormValues) => {
       const service = options?.services.find(
@@ -338,6 +389,10 @@ function BookingForm({ onClose }: { onClose: () => void }) {
           values.customerMode === "registered" ? values.customerId : null,
         therapist_id: values.therapistId,
         service_id: values.serviceId,
+        customer_package_id:
+          values.customerMode === "registered" && values.customerPackageId
+            ? values.customerPackageId
+            : null,
         guest_name:
           values.customerMode === "guest" ? values.guestName.trim() : null,
         guest_phone:
@@ -466,7 +521,10 @@ function BookingForm({ onClose }: { onClose: () => void }) {
                         label: customer.full_name,
                       }))}
                       value={field.value}
-                      onChange={field.onChange}
+                      onChange={(value) => {
+                        field.onChange(value);
+                        setValue("customerPackageId", "");
+                      }}
                       placeholder="Seleccionar cliente"
                       searchPlaceholder="Buscar cliente…"
                     />
@@ -486,7 +544,10 @@ function BookingForm({ onClose }: { onClose: () => void }) {
                       service.name + " · " + service.duration_minutes + " min",
                   }))}
                   value={watch("serviceId")}
-                  onChange={(value) => setValue("serviceId", value)}
+                  onChange={(value) => {
+                    setValue("serviceId", value);
+                    setValue("customerPackageId", "");
+                  }}
                   placeholder="Seleccionar servicio"
                   searchPlaceholder="Buscar servicio…"
                 />
@@ -509,6 +570,42 @@ function BookingForm({ onClose }: { onClose: () => void }) {
                   )}
                 />
               </Field>
+              {mode === "registered" && (
+                <Field label="Paquete (opcional)">
+                  <Controller
+                    control={control}
+                    name="customerPackageId"
+                    render={({ field }) => (
+                      <SearchableSelect
+                        options={(options?.customerPackages ?? [])
+                          .filter(
+                            (item) =>
+                              item.customer_id === customerId &&
+                              (item.expires_at === null ||
+                                new Date(item.expires_at).getTime() >=
+                                  Date.now()) &&
+                              item.used_sessions < item.total_sessions &&
+                              item.package?.[0]?.package_items?.some(
+                                (packageItem) =>
+                                  packageItem.service_id === serviceId,
+                              ),
+                          )
+                          .map((item) => ({
+                            value: item.id,
+                            label: `${item.package?.[0]?.name ?? "Paquete"} · ${item.total_sessions - item.used_sessions} sesiones disponibles`,
+                          }))}
+                        value={field.value}
+                        onChange={field.onChange}
+                        placeholder="Sin paquete"
+                        searchPlaceholder="Buscar paquete…"
+                      />
+                    )}
+                  />
+                  <small className="field-hint">
+                    Sólo aparecen paquetes vigentes para el servicio elegido.
+                  </small>
+                </Field>
+              )}
               <Field label="Fecha" error={errors.date?.message}>
                 <input type="date" {...register("date")} />
               </Field>

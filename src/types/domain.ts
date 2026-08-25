@@ -34,6 +34,7 @@ export interface Booking {
   customer_id: string | null;
   therapist_id: string;
   service_id: string;
+  customer_package_id: string | null;
   guest_name: string | null;
   guest_phone: string | null;
   starts_at: string;
@@ -45,6 +46,7 @@ export interface Booking {
   customer: { full_name: string } | null;
   therapist: { full_name: string } | null;
   service: { name: string; duration_minutes: number; price: number } | null;
+  customer_package: { package: { name: string } | null } | null;
 }
 
 export interface Service {

@@ -23,36 +23,86 @@ interface SaleRow {
   discount: number | string;
   created_at: string;
   customer: { full_name: string } | null;
+  promotion: { name: string } | null;
+}
+interface SalePromotion {
+  id: string;
+  name: string;
+  discount_type: "percentage" | "fixed";
+  discount_value: number | string;
+  starts_at: string | null;
+  ends_at: string | null;
+  max_uses: number | null;
+  uses_count: number;
+  service_ids: string[];
 }
 async function getSales(page: number, pageSize: number) {
   const { data, count, error } = await supabase
     .from("sales")
-    .select("id, total, discount, created_at, customer:customers(full_name)", {
-      count: "exact",
-    })
+    .select(
+      "id, total, discount, created_at, customer:customers(full_name), promotion:promotions(name)",
+      { count: "exact" },
+    )
     .order("created_at", { ascending: false })
     .range((page - 1) * pageSize, page * pageSize - 1);
   if (error) throw error;
   return { rows: (data ?? []) as unknown as SaleRow[], total: count ?? 0 };
 }
 async function getSaleOptions() {
-  const [services, customers] = await Promise.all([
-    supabase
-      .from("services")
-      .select("id, name, duration_minutes, price, active")
-      .eq("active", true)
-      .order("name"),
-    supabase
-      .from("customers")
-      .select("id, full_name, phone, email, active")
-      .eq("active", true)
-      .order("full_name"),
-  ]);
+  const [services, customers, promotions, promotionServices] =
+    await Promise.all([
+      supabase
+        .from("services")
+        .select("id, name, duration_minutes, price, active")
+        .eq("active", true)
+        .order("name"),
+      supabase
+        .from("customers")
+        .select("id, full_name, phone, email, active")
+        .eq("active", true)
+        .order("full_name"),
+      supabase
+        .from("promotions")
+        .select(
+          "id, name, discount_type, discount_value, starts_at, ends_at, max_uses, uses_count",
+        )
+        .eq("active", true)
+        .order("name"),
+      supabase.from("promotion_services").select("promotion_id, service_id"),
+    ]);
   if (services.error) throw services.error;
   if (customers.error) throw customers.error;
+  if (promotions.error) throw promotions.error;
+  if (promotionServices.error) throw promotionServices.error;
+  const now = Date.now();
+  const serviceIdsByPromotion = new Map<string, string[]>();
+  for (const item of promotionServices.data ?? []) {
+    const serviceIds = serviceIdsByPromotion.get(item.promotion_id) ?? [];
+    serviceIds.push(item.service_id);
+    serviceIdsByPromotion.set(item.promotion_id, serviceIds);
+  }
   return {
     services: (services.data ?? []) as Service[],
     customers: (customers.data ?? []) as Customer[],
+    promotions: (promotions.data ?? [])
+      .filter((promotion) => {
+        const starts = promotion.starts_at
+          ? new Date(promotion.starts_at).getTime()
+          : -Infinity;
+        const ends = promotion.ends_at
+          ? new Date(promotion.ends_at).getTime()
+          : Infinity;
+        return (
+          starts <= now &&
+          now <= ends &&
+          (promotion.max_uses === null ||
+            promotion.uses_count < promotion.max_uses)
+        );
+      })
+      .map((promotion) => ({
+        ...promotion,
+        service_ids: serviceIdsByPromotion.get(promotion.id) ?? [],
+      })) as SalePromotion[],
   };
 }
 const saleSchema = z.object({
@@ -65,6 +115,7 @@ const saleSchema = z.object({
     )
     .min(1, "Agrega al menos un servicio"),
   customerId: z.string(),
+  promotionId: z.string(),
   discount: z.coerce.number().min(0),
   paymentMethod: z.enum(["cash", "yape", "plin", "card", "transfer", "other"]),
   paymentAmount: z.coerce.number().min(0),
@@ -106,6 +157,7 @@ export function SalesPage() {
                   <th>Cliente</th>
                   <th>Total</th>
                   <th>Descuento</th>
+                  <th>Promoción</th>
                   <th>Estado</th>
                 </tr>
               </thead>
@@ -124,6 +176,7 @@ export function SalesPage() {
                       <strong>{formatCurrency(sale.total)}</strong>
                     </td>
                     <td>{formatCurrency(sale.discount)}</td>
+                    <td>{sale.promotion?.name || "—"}</td>
                     <td>
                       <Badge tone="success">Registrada</Badge>
                     </td>
@@ -162,6 +215,7 @@ function SaleForm({ onClose }: { onClose: () => void }) {
     defaultValues: {
       items: [{ serviceId: "", quantity: 1 }],
       customerId: "",
+      promotionId: "",
       discount: 0,
       paymentMethod: "cash",
       paymentAmount: 0,
@@ -169,13 +223,32 @@ function SaleForm({ onClose }: { onClose: () => void }) {
   });
   const items = form.watch("items");
   const discount = Number(form.watch("discount") || 0);
+  const promotionId = form.watch("promotionId");
+  const promotion = options?.promotions.find((item) => item.id === promotionId);
   const subtotal = (items ?? []).reduce((sum, item) => {
     const service = options?.services.find(
       (option) => option.id === item.serviceId,
     );
     return sum + Number(service?.price ?? 0) * Number(item.quantity || 0);
   }, 0);
-  const total = Math.max(0, subtotal - discount);
+  const promotionBase = (items ?? []).reduce((sum, item) => {
+    const applies =
+      !promotion ||
+      promotion.service_ids.length === 0 ||
+      promotion.service_ids.includes(item.serviceId);
+    if (!applies) return sum;
+    const service = options?.services.find(
+      (option) => option.id === item.serviceId,
+    );
+    return sum + Number(service?.price ?? 0) * Number(item.quantity || 0);
+  }, 0);
+  const promotionDiscount = promotion
+    ? promotion.discount_type === "percentage"
+      ? promotionBase * (Number(promotion.discount_value) / 100)
+      : Math.min(promotionBase, Number(promotion.discount_value))
+    : 0;
+  const totalDiscount = Math.min(subtotal, discount + promotionDiscount);
+  const total = Math.max(0, subtotal - totalDiscount);
   const { fields, append, remove } = useFieldArray({
     control: form.control,
     name: "items",
@@ -199,14 +272,34 @@ function SaleForm({ onClose }: { onClose: () => void }) {
       );
       if (values.discount > saleSubtotal)
         throw new Error("Descuento supera subtotal");
-      const totalAmount = saleSubtotal - values.discount;
+      const selectedPromotion = options?.promotions.find(
+        (item) => item.id === values.promotionId,
+      );
+      const promotionBase = saleItems.reduce((sum, item) => {
+        const applies =
+          !selectedPromotion ||
+          selectedPromotion.service_ids.length === 0 ||
+          selectedPromotion.service_ids.includes(item.service.id);
+        return applies ? sum + item.subtotal : sum;
+      }, 0);
+      const promotionDiscount = selectedPromotion
+        ? selectedPromotion.discount_type === "percentage"
+          ? promotionBase * (Number(selectedPromotion.discount_value) / 100)
+          : Math.min(promotionBase, Number(selectedPromotion.discount_value))
+        : 0;
+      const totalDiscount = Math.min(
+        saleSubtotal,
+        values.discount + promotionDiscount,
+      );
+      const totalAmount = saleSubtotal - totalDiscount;
       const { data: sale, error: saleError } = await supabase
         .from("sales")
         .insert({
           customer_id: values.customerId || null,
           subtotal: saleSubtotal,
-          discount: values.discount,
+          discount: totalDiscount,
           total: totalAmount,
+          promotion_id: values.promotionId || null,
         })
         .select("id")
         .single();
@@ -223,6 +316,13 @@ function SaleForm({ onClose }: { onClose: () => void }) {
         })),
       );
       if (itemError) throw itemError;
+      if (selectedPromotion) {
+        const { error: promotionError } = await supabase
+          .from("promotions")
+          .update({ uses_count: selectedPromotion.uses_count + 1 })
+          .eq("id", selectedPromotion.id);
+        if (promotionError) throw promotionError;
+      }
       if (values.paymentAmount > 0) {
         const { data: register } = await supabase
           .from("cash_registers")
@@ -311,6 +411,29 @@ function SaleForm({ onClose }: { onClose: () => void }) {
               />
             </Field>
           </div>
+          <Field label="Promoción (opcional)">
+            <Controller
+              control={form.control}
+              name="promotionId"
+              render={({ field }) => (
+                <SearchableSelect
+                  options={(options?.promotions ?? []).map((item) => ({
+                    value: item.id,
+                    label: `${item.name} · ${item.discount_type === "percentage" ? `${item.discount_value}%` : formatCurrency(item.discount_value)}`,
+                  }))}
+                  value={field.value}
+                  onChange={field.onChange}
+                  placeholder="Sin promoción"
+                  searchPlaceholder="Buscar promoción…"
+                />
+              )}
+            />
+            {promotion && (
+              <small className="field-hint">
+                Descuento aplicado: {formatCurrency(promotionDiscount)}
+              </small>
+            )}
+          </Field>
           <div className="form-section">
             <div className="card-heading">
               <strong>Servicios vendidos</strong>
