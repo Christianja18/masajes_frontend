@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Gift, Plus, Trash2, UserPlus } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { useForm } from "react-hook-form";
+import { useFieldArray, useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { supabase } from "../../lib/supabase";
@@ -32,14 +32,31 @@ async function getPackages(): Promise<PackageRow[]> {
   if (error) throw error;
   return (data ?? []) as PackageRow[];
 }
-const packageSchema = z.object({
-  name: z.string().trim().min(2, "Ingresa nombre"),
-  description: z.string().trim(),
-  price: z.coerce.number().min(0),
-  validity: z.coerce.number().int().positive().or(z.literal(0)),
-  serviceId: z.string().min(1, "Selecciona servicio"),
-  quantity: z.coerce.number().int().positive(),
-});
+const packageSchema = z
+  .object({
+    name: z.string().trim().min(2, "Ingresa nombre"),
+    description: z.string().trim(),
+    price: z.coerce.number().min(0),
+    validity: z.coerce.number().int().positive().or(z.literal(0)),
+    items: z
+      .array(
+        z.object({
+          serviceId: z.string().min(1, "Selecciona servicio"),
+          quantity: z.coerce.number().int().positive("Ingresa sesiones"),
+        }),
+      )
+      .min(1, "Agrega al menos un servicio"),
+  })
+  .superRefine((values, context) => {
+    const serviceIds = values.items.map((item) => item.serviceId);
+    if (new Set(serviceIds).size !== serviceIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["items"],
+        message: "No repitas servicios; aumenta sus sesiones.",
+      });
+    }
+  });
 type PackageValues = z.infer<typeof packageSchema>;
 type PackageInput = z.input<typeof packageSchema>;
 export function PackagesPage() {
@@ -158,9 +175,12 @@ function PackageForm({ onClose }: { onClose: () => void }) {
       description: "",
       price: 0,
       validity: 0,
-      serviceId: "",
-      quantity: 1,
+      items: [{ serviceId: "", quantity: 1 }],
     },
+  });
+  const { fields, append, remove } = useFieldArray({
+    control: form.control,
+    name: "items",
   });
   const mutation = useMutation({
     mutationFn: async (values: PackageValues) => {
@@ -175,11 +195,13 @@ function PackageForm({ onClose }: { onClose: () => void }) {
         .select("id")
         .single();
       if (packageError) throw packageError;
-      const { error: itemError } = await supabase.from("package_items").insert({
-        package_id: packageRow.id,
-        service_id: values.serviceId,
-        quantity: values.quantity,
-      });
+      const { error: itemError } = await supabase.from("package_items").insert(
+        values.items.map((item) => ({
+          package_id: packageRow.id,
+          service_id: item.serviceId,
+          quantity: item.quantity,
+        })),
+      );
       if (itemError) throw itemError;
     },
     onSuccess: () => {
@@ -220,25 +242,67 @@ function PackageForm({ onClose }: { onClose: () => void }) {
                 {...form.register("price")}
               />
             </Field>
-            <Field
-              label="Servicio"
-              error={form.formState.errors.serviceId?.message}
-            >
-              <select {...form.register("serviceId")}>
-                <option value="">Seleccionar servicio</option>
-                {services?.map((service) => (
-                  <option key={service.id} value={service.id}>
-                    {service.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Sesiones">
-              <input type="number" min="1" {...form.register("quantity")} />
-            </Field>
             <Field label="Vigencia (días, opcional)">
               <input type="number" min="0" {...form.register("validity")} />
             </Field>
+          </div>
+          <div className="form-section">
+            <div className="card-heading">
+              <strong>Servicios incluidos</strong>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => append({ serviceId: "", quantity: 1 })}
+              >
+                <Plus size={15} /> Agregar servicio
+              </Button>
+            </div>
+            {fields.map((field, index) => (
+              <div className="form-grid package-item-row" key={field.id}>
+                <Field
+                  label={"Servicio " + (index + 1)}
+                  error={
+                    form.formState.errors.items?.[index]?.serviceId?.message
+                  }
+                >
+                  <select
+                    {...form.register(`items.${index}.serviceId` as const)}
+                  >
+                    <option value="">Seleccionar servicio</option>
+                    {services?.map((service) => (
+                      <option key={service.id} value={service.id}>
+                        {service.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field
+                  label="Sesiones"
+                  error={
+                    form.formState.errors.items?.[index]?.quantity?.message
+                  }
+                >
+                  <input
+                    type="number"
+                    min="1"
+                    {...form.register(`items.${index}.quantity` as const)}
+                  />
+                </Field>
+                <IconButton
+                  label="Quitar servicio"
+                  variant="danger"
+                  disabled={fields.length === 1}
+                  onClick={() => remove(index)}
+                >
+                  <Trash2 size={15} />
+                </IconButton>
+              </div>
+            ))}
+            {form.formState.errors.items?.message && (
+              <small className="field-error">
+                {form.formState.errors.items.message}
+              </small>
+            )}
           </div>
           <Field label="Descripción">
             <input {...form.register("description")} placeholder="Incluye…" />

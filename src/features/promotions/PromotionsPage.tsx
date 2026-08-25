@@ -42,7 +42,7 @@ const promotionSchema = z.object({
   type: z.enum(["percentage", "fixed"]),
   value: z.coerce.number().positive("Debe ser mayor que 0"),
   maxUses: z.coerce.number().int().positive().or(z.literal(0)),
-  serviceId: z.string(),
+  serviceIds: z.array(z.string()),
 });
 type PromotionValues = z.infer<typeof promotionSchema>;
 type PromotionInput = z.input<typeof promotionSchema>;
@@ -154,7 +154,7 @@ function PromotionForm({ onClose }: { onClose: () => void }) {
       type: "percentage",
       value: 10,
       maxUses: 0,
-      serviceId: "",
+      serviceIds: [],
     },
   });
   const mutation = useMutation({
@@ -173,10 +173,15 @@ function PromotionForm({ onClose }: { onClose: () => void }) {
         .select("id")
         .single();
       if (insertError) throw insertError;
-      if (values.serviceId) {
+      if (values.serviceIds.length > 0) {
         const { error: relationError } = await supabase
           .from("promotion_services")
-          .insert({ promotion_id: promotion.id, service_id: values.serviceId });
+          .insert(
+            values.serviceIds.map((serviceId) => ({
+              promotion_id: promotion.id,
+              service_id: serviceId,
+            })),
+          );
         if (relationError) throw relationError;
       }
     },
@@ -234,16 +239,22 @@ function PromotionForm({ onClose }: { onClose: () => void }) {
             <Field label="Usos máximos (0 = sin límite)">
               <input type="number" min="0" {...form.register("maxUses")} />
             </Field>
-            <Field label="Servicio aplicable">
-              <select {...form.register("serviceId")}>
-                <option value="">Todos los servicios</option>
-                {services?.map((service) => (
-                  <option key={service.id} value={service.id}>
-                    {service.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
+          </div>
+          <div className="form-section">
+            <strong>Servicios aplicables</strong>
+            <p className="muted">Si no seleccionas ninguno, aplica a todos.</p>
+            <div className="check-list">
+              {services?.map((service) => (
+                <label className="checkbox-label" key={service.id}>
+                  <input
+                    type="checkbox"
+                    value={service.id}
+                    {...form.register("serviceIds")}
+                  />
+                  {service.name}
+                </label>
+              ))}
+            </div>
           </div>
           <Field label="Descripción">
             <input

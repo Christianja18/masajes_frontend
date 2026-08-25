@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { useForm } from "react-hook-form";
+import { useFieldArray, useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { supabase } from "../../lib/supabase";
@@ -53,9 +53,15 @@ async function getSaleOptions() {
   };
 }
 const saleSchema = z.object({
-  serviceId: z.string().min(1, "Selecciona un servicio"),
+  items: z
+    .array(
+      z.object({
+        serviceId: z.string().min(1, "Selecciona un servicio"),
+        quantity: z.coerce.number().int().min(1),
+      }),
+    )
+    .min(1, "Agrega al menos un servicio"),
   customerId: z.string(),
-  quantity: z.coerce.number().int().min(1),
   discount: z.coerce.number().min(0),
   paymentMethod: z.enum(["cash", "yape", "plin", "card", "transfer", "other"]),
   paymentAmount: z.coerce.number().min(0),
@@ -154,51 +160,68 @@ function SaleForm({ onClose }: { onClose: () => void }) {
   const form = useForm<SaleInput, unknown, SaleValues>({
     resolver: zodResolver(saleSchema),
     defaultValues: {
-      serviceId: "",
+      items: [{ serviceId: "", quantity: 1 }],
       customerId: "",
-      quantity: 1,
       discount: 0,
       paymentMethod: "cash",
       paymentAmount: 0,
     },
   });
-  const serviceId = form.watch("serviceId");
-  const quantity = Number(form.watch("quantity") || 0);
+  const items = form.watch("items");
   const discount = Number(form.watch("discount") || 0);
-  const selected = options?.services.find(
-    (service) => service.id === serviceId,
-  );
-  const total = Math.max(0, Number(selected?.price ?? 0) * quantity - discount);
+  const subtotal = (items ?? []).reduce((sum, item) => {
+    const service = options?.services.find(
+      (option) => option.id === item.serviceId,
+    );
+    return sum + Number(service?.price ?? 0) * Number(item.quantity || 0);
+  }, 0);
+  const total = Math.max(0, subtotal - discount);
+  const { fields, append, remove } = useFieldArray({
+    control: form.control,
+    name: "items",
+  });
   const mutation = useMutation({
     mutationFn: async (values: SaleValues) => {
-      const service = options?.services.find(
-        (item) => item.id === values.serviceId,
+      const saleItems = values.items.map((item) => {
+        const service = options?.services.find(
+          (option) => option.id === item.serviceId,
+        );
+        if (!service) throw new Error("Servicio inválido");
+        return {
+          service,
+          quantity: item.quantity,
+          subtotal: Number(service.price) * item.quantity,
+        };
+      });
+      const saleSubtotal = saleItems.reduce(
+        (sum, item) => sum + item.subtotal,
+        0,
       );
-      if (!service) throw new Error("Servicio inválido");
-      if (values.discount > service.price * values.quantity)
+      if (values.discount > saleSubtotal)
         throw new Error("Descuento supera subtotal");
-      const subtotal = Number(service.price) * values.quantity;
-      const totalAmount = subtotal - values.discount;
+      const totalAmount = saleSubtotal - values.discount;
       const { data: sale, error: saleError } = await supabase
         .from("sales")
         .insert({
           customer_id: values.customerId || null,
-          subtotal,
+          subtotal: saleSubtotal,
           discount: values.discount,
           total: totalAmount,
         })
         .select("id")
         .single();
       if (saleError) throw saleError;
-      const { error: itemError } = await supabase.from("sale_items").insert({
-        sale_id: sale.id,
-        service_id: service.id,
-        description: service.name,
-        quantity: values.quantity,
-        unit_price: service.price,
-        discount: 0,
-        total: subtotal,
-      });
+      const { error: itemError } = await supabase.from("sale_items").insert(
+        saleItems.map((item) => ({
+          sale_id: sale.id,
+          service_id: item.service.id,
+          description: item.service.name,
+          quantity: item.quantity,
+          unit_price: item.service.price,
+          discount: 0,
+          total: item.subtotal,
+        })),
+      );
       if (itemError) throw itemError;
       if (values.paymentAmount > 0) {
         const { data: register } = await supabase
@@ -258,19 +281,6 @@ function SaleForm({ onClose }: { onClose: () => void }) {
           }
         >
           <div className="form-grid">
-            <Field
-              label="Servicio"
-              error={form.formState.errors.serviceId?.message}
-            >
-              <select {...form.register("serviceId")}>
-                <option value="">Seleccionar servicio</option>
-                {options?.services.map((service) => (
-                  <option key={service.id} value={service.id}>
-                    {service.name} · {formatCurrency(service.price)}
-                  </option>
-                ))}
-              </select>
-            </Field>
             <Field label="Cliente (opcional)">
               <select {...form.register("customerId")}>
                 <option value="">Sin cliente registrado</option>
@@ -281,9 +291,6 @@ function SaleForm({ onClose }: { onClose: () => void }) {
                 ))}
               </select>
             </Field>
-            <Field label="Cantidad">
-              <input type="number" min="1" {...form.register("quantity")} />
-            </Field>
             <Field label="Descuento (S/)">
               <input
                 type="number"
@@ -292,6 +299,61 @@ function SaleForm({ onClose }: { onClose: () => void }) {
                 {...form.register("discount")}
               />
             </Field>
+          </div>
+          <div className="form-section">
+            <div className="card-heading">
+              <strong>Servicios vendidos</strong>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => append({ serviceId: "", quantity: 1 })}
+              >
+                <Plus size={15} /> Agregar servicio
+              </Button>
+            </div>
+            {fields.map((field, index) => (
+              <div className="form-grid" key={field.id}>
+                <Field
+                  label={"Servicio " + (index + 1)}
+                  error={
+                    form.formState.errors.items?.[index]?.serviceId?.message
+                  }
+                >
+                  <select
+                    {...form.register(`items.${index}.serviceId` as const)}
+                  >
+                    <option value="">Seleccionar servicio</option>
+                    {options?.services.map((service) => (
+                      <option key={service.id} value={service.id}>
+                        {service.name} · {formatCurrency(service.price)}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field
+                  label="Cantidad"
+                  error={
+                    form.formState.errors.items?.[index]?.quantity?.message
+                  }
+                >
+                  <input
+                    type="number"
+                    min="1"
+                    {...form.register(`items.${index}.quantity` as const)}
+                  />
+                </Field>
+                <button
+                  type="button"
+                  className="icon-action icon-action-danger"
+                  aria-label="Quitar servicio"
+                  title="Quitar servicio"
+                  disabled={fields.length === 1}
+                  onClick={() => remove(index)}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
           </div>
           <div className="cash-total">
             <span>Total</span>
