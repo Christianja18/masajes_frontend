@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Gift, Plus, Trash2, UserPlus } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { useFieldArray, useForm } from "react-hook-form";
+import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { supabase } from "../../lib/supabase";
@@ -14,6 +14,7 @@ import {
   ErrorMessage,
   IconButton,
   Pagination,
+  SearchableSelect,
   formatCurrency,
 } from "../../shared/ui";
 interface PackageRow {
@@ -270,16 +271,22 @@ function PackageForm({ onClose }: { onClose: () => void }) {
                     form.formState.errors.items?.[index]?.serviceId?.message
                   }
                 >
-                  <select
-                    {...form.register(`items.${index}.serviceId` as const)}
-                  >
-                    <option value="">Seleccionar servicio</option>
-                    {services?.map((service) => (
-                      <option key={service.id} value={service.id}>
-                        {service.name}
-                      </option>
-                    ))}
-                  </select>
+                  <Controller
+                    control={form.control}
+                    name={`items.${index}.serviceId` as const}
+                    render={({ field: controllerField }) => (
+                      <SearchableSelect
+                        options={(services ?? []).map((service) => ({
+                          value: service.id,
+                          label: service.name,
+                        }))}
+                        value={controllerField.value}
+                        onChange={controllerField.onChange}
+                        placeholder="Seleccionar servicio"
+                        searchPlaceholder="Buscar servicio…"
+                      />
+                    )}
+                  />
                 </Field>
                 <Field
                   label="Sesiones"
@@ -427,14 +434,22 @@ function PurchasePackageForm({
         >
           <label className="field">
             <span>Cliente</span>
-            <select {...form.register("customerId")}>
-              <option value="">Seleccionar cliente</option>
-              {customers?.map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.full_name}
-                </option>
-              ))}
-            </select>
+            <Controller
+              control={form.control}
+              name="customerId"
+              render={({ field }) => (
+                <SearchableSelect
+                  options={(customers ?? []).map((customer) => ({
+                    value: customer.id,
+                    label: customer.full_name,
+                  }))}
+                  value={field.value}
+                  onChange={field.onChange}
+                  placeholder="Seleccionar cliente"
+                  searchPlaceholder="Buscar cliente…"
+                />
+              )}
+            />
             {form.formState.errors.customerId && (
               <small className="field-error">
                 {form.formState.errors.customerId.message}

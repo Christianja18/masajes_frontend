@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, Clock3, Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { supabase } from "../../lib/supabase";
@@ -13,6 +13,7 @@ import {
   EmptyState,
   ErrorMessage,
   Pagination,
+  SearchableSelect,
 } from "../../shared/ui";
 interface Schedule {
   id: string;
@@ -292,14 +293,22 @@ function ScheduleForm({ onClose }: { onClose: () => void }) {
         >
           <div className="form-grid">
             <Field label="Masajista">
-              <select {...form.register("therapistId")}>
-                <option value="">Seleccionar</option>
-                {therapists?.map((therapist) => (
-                  <option key={therapist.id} value={therapist.id}>
-                    {therapist.full_name}
-                  </option>
-                ))}
-              </select>
+              <Controller
+                control={form.control}
+                name="therapistId"
+                render={({ field }) => (
+                  <SearchableSelect
+                    options={(therapists ?? []).map((therapist) => ({
+                      value: therapist.id,
+                      label: therapist.full_name,
+                    }))}
+                    value={field.value}
+                    onChange={field.onChange}
+                    placeholder="Seleccionar masajista"
+                    searchPlaceholder="Buscar masajista…"
+                  />
+                )}
+              />
             </Field>
             <Field label="Día">
               <select {...form.register("weekday")}>
@@ -420,14 +429,22 @@ function BlockForm({ onClose }: { onClose: () => void }) {
         >
           <div className="form-grid">
             <Field label="Masajista">
-              <select {...form.register("therapistId")}>
-                <option value="">Seleccionar</option>
-                {therapists?.map((therapist) => (
-                  <option key={therapist.id} value={therapist.id}>
-                    {therapist.full_name}
-                  </option>
-                ))}
-              </select>
+              <Controller
+                control={form.control}
+                name="therapistId"
+                render={({ field }) => (
+                  <SearchableSelect
+                    options={(therapists ?? []).map((therapist) => ({
+                      value: therapist.id,
+                      label: therapist.full_name,
+                    }))}
+                    value={field.value}
+                    onChange={field.onChange}
+                    placeholder="Seleccionar masajista"
+                    searchPlaceholder="Buscar masajista…"
+                  />
+                )}
+              />
             </Field>
             <Field label="Fecha">
               <input type="date" {...form.register("date")} />

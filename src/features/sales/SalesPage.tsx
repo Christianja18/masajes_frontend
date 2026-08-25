@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { useFieldArray, useForm } from "react-hook-form";
+import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { supabase } from "../../lib/supabase";
@@ -14,6 +14,7 @@ import {
   ErrorMessage,
   formatCurrency,
   Pagination,
+  SearchableSelect,
 } from "../../shared/ui";
 
 interface SaleRow {
@@ -281,14 +282,25 @@ function SaleForm({ onClose }: { onClose: () => void }) {
         >
           <div className="form-grid">
             <Field label="Cliente (opcional)">
-              <select {...form.register("customerId")}>
-                <option value="">Sin cliente registrado</option>
-                {options?.customers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.full_name}
-                  </option>
-                ))}
-              </select>
+              <Controller
+                control={form.control}
+                name="customerId"
+                render={({ field }) => (
+                  <SearchableSelect
+                    options={[
+                      { value: "", label: "Sin cliente registrado" },
+                      ...(options?.customers ?? []).map((customer) => ({
+                        value: customer.id,
+                        label: customer.full_name,
+                      })),
+                    ]}
+                    value={field.value}
+                    onChange={field.onChange}
+                    placeholder="Sin cliente registrado"
+                    searchPlaceholder="Buscar cliente…"
+                  />
+                )}
+              />
             </Field>
             <Field label="Descuento (S/)">
               <input
@@ -318,16 +330,25 @@ function SaleForm({ onClose }: { onClose: () => void }) {
                     form.formState.errors.items?.[index]?.serviceId?.message
                   }
                 >
-                  <select
-                    {...form.register(`items.${index}.serviceId` as const)}
-                  >
-                    <option value="">Seleccionar servicio</option>
-                    {options?.services.map((service) => (
-                      <option key={service.id} value={service.id}>
-                        {service.name} · {formatCurrency(service.price)}
-                      </option>
-                    ))}
-                  </select>
+                  <Controller
+                    control={form.control}
+                    name={`items.${index}.serviceId` as const}
+                    render={({ field: controllerField }) => (
+                      <SearchableSelect
+                        options={(options?.services ?? []).map((service) => ({
+                          value: service.id,
+                          label:
+                            service.name +
+                            " · " +
+                            formatCurrency(service.price),
+                        }))}
+                        value={controllerField.value}
+                        onChange={controllerField.onChange}
+                        placeholder="Seleccionar servicio"
+                        searchPlaceholder="Buscar servicio…"
+                      />
+                    )}
+                  />
                 </Field>
                 <Field
                   label="Cantidad"

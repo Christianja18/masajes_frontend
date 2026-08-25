@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
-import { useForm, type Resolver } from "react-hook-form";
+import { Controller, useForm, type Resolver } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { supabase } from "../../lib/supabase";
 import type { Therapist } from "../../types/domain";
-import { Button, ErrorMessage } from "../../shared/ui";
+import { Button, ErrorMessage, SearchableSelect } from "../../shared/ui";
 
 type Action = "open" | "close" | "movement" | "mobility";
 const money = z.coerce.number().positive("Debe ser mayor que 0");
@@ -269,14 +269,22 @@ export function CashActions({
                   />
                 </Field>
                 <Field label="Masajista">
-                  <select {...form.register("therapistId")}>
-                    <option value="">Sin asignar</option>
-                    {therapists?.map((therapist) => (
-                      <option key={therapist.id} value={therapist.id}>
-                        {therapist.full_name}
-                      </option>
-                    ))}
-                  </select>
+                  <Controller
+                    control={form.control}
+                    name="therapistId"
+                    render={({ field }) => (
+                      <SearchableSelect
+                        options={(therapists ?? []).map((therapist) => ({
+                          value: therapist.id,
+                          label: therapist.full_name,
+                        }))}
+                        value={field.value}
+                        onChange={field.onChange}
+                        placeholder="Sin asignar"
+                        searchPlaceholder="Buscar masajista…"
+                      />
+                    )}
+                  />
                 </Field>
               </div>
               <Field

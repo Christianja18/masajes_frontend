@@ -1,6 +1,13 @@
 /* eslint-disable react-refresh/only-export-components */
 import type { ButtonHTMLAttributes, ReactNode } from "react";
-import { ChevronLeft, ChevronRight, LoaderCircle } from "lucide-react";
+import { useState } from "react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  LoaderCircle,
+  Search,
+} from "lucide-react";
 
 export function Button({
   children,
@@ -96,6 +103,76 @@ export function Pagination({
         <ChevronRight size={16} />
       </button>
     </nav>
+  );
+}
+
+export function SearchableSelect({
+  options,
+  value,
+  onChange,
+  placeholder = "Seleccionar",
+  searchPlaceholder = "Buscar…",
+}: {
+  options: Array<{ value: string; label: string }>;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  searchPlaceholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const selected = options.find((option) => option.value === value);
+  const filtered = options.filter((option) =>
+    option.label.toLowerCase().includes(search.toLowerCase()),
+  );
+  return (
+    <div className="searchable-select">
+      <button
+        type="button"
+        className="searchable-select-trigger"
+        onClick={() => setOpen((current) => !current)}
+        onBlur={() => window.setTimeout(() => setOpen(false), 150)}
+        aria-expanded={open}
+      >
+        <span>{selected?.label || placeholder}</span>
+        <ChevronDown size={16} />
+      </button>
+      {open && (
+        <div className="searchable-select-menu">
+          <div className="searchable-select-search">
+            <Search size={14} />
+            <input
+              autoFocus
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder={searchPlaceholder}
+              onBlur={() => window.setTimeout(() => setOpen(false), 150)}
+            />
+          </div>
+          <div className="searchable-select-options">
+            {filtered.length ? (
+              filtered.map((option) => (
+                <button
+                  type="button"
+                  key={option.value}
+                  className={option.value === value ? "selected" : ""}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    onChange(option.value);
+                    setSearch("");
+                    setOpen(false);
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))
+            ) : (
+              <span className="searchable-select-empty">Sin resultados</span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

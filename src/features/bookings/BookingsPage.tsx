@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import type { FormEvent } from "react";
 import { supabase } from "../../lib/supabase";
 import type { Booking, Customer, Service, Therapist } from "../../types/domain";
@@ -23,6 +23,7 @@ import {
   formatDate,
   Pagination,
   IconButton,
+  SearchableSelect,
 } from "../../shared/ui";
 async function getBookings(page: number, pageSize: number, search: string) {
   const from = (page - 1) * pageSize;
@@ -296,9 +297,11 @@ function BookingForm({ onClose }: { onClose: () => void }) {
   });
   const [serverError, setServerError] = useState("");
   const {
+    control,
     register,
     handleSubmit,
     watch,
+    setValue,
     reset,
     formState: { errors },
   } = useForm<BookingFormValues>({
@@ -453,14 +456,22 @@ function BookingForm({ onClose }: { onClose: () => void }) {
                 label="Cliente registrado"
                 error={errors.customerId?.message}
               >
-                <select {...register("customerId")}>
-                  <option value="">Seleccionar cliente</option>
-                  {options?.customers.map((customer) => (
-                    <option key={customer.id} value={customer.id}>
-                      {customer.full_name}
-                    </option>
-                  ))}
-                </select>
+                <Controller
+                  control={control}
+                  name="customerId"
+                  render={({ field }) => (
+                    <SearchableSelect
+                      options={(options?.customers ?? []).map((customer) => ({
+                        value: customer.id,
+                        label: customer.full_name,
+                      }))}
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Seleccionar cliente"
+                      searchPlaceholder="Buscar cliente…"
+                    />
+                  )}
+                />
               </Field>
             )}
           </div>
@@ -468,24 +479,35 @@ function BookingForm({ onClose }: { onClose: () => void }) {
             <strong>Servicio y horario</strong>
             <div className="form-grid">
               <Field label="Servicio" error={errors.serviceId?.message}>
-                <select {...register("serviceId")}>
-                  <option value="">Seleccionar servicio</option>
-                  {options?.services.map((service) => (
-                    <option key={service.id} value={service.id}>
-                      {service.name} · {service.duration_minutes} min
-                    </option>
-                  ))}
-                </select>
+                <SearchableSelect
+                  options={(options?.services ?? []).map((service) => ({
+                    value: service.id,
+                    label:
+                      service.name + " · " + service.duration_minutes + " min",
+                  }))}
+                  value={watch("serviceId")}
+                  onChange={(value) => setValue("serviceId", value)}
+                  placeholder="Seleccionar servicio"
+                  searchPlaceholder="Buscar servicio…"
+                />
               </Field>
               <Field label="Masajista" error={errors.therapistId?.message}>
-                <select {...register("therapistId")}>
-                  <option value="">Seleccionar masajista</option>
-                  {options?.therapists.map((therapist) => (
-                    <option key={therapist.id} value={therapist.id}>
-                      {therapist.full_name}
-                    </option>
-                  ))}
-                </select>
+                <Controller
+                  control={control}
+                  name="therapistId"
+                  render={({ field }) => (
+                    <SearchableSelect
+                      options={(options?.therapists ?? []).map((therapist) => ({
+                        value: therapist.id,
+                        label: therapist.full_name,
+                      }))}
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Seleccionar masajista"
+                      searchPlaceholder="Buscar masajista…"
+                    />
+                  )}
+                />
               </Field>
               <Field label="Fecha" error={errors.date?.message}>
                 <input type="date" {...register("date")} />
