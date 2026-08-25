@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import type { ButtonHTMLAttributes, ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronLeft,
@@ -121,17 +121,32 @@ export function SearchableSelect({
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const selectRef = useRef<HTMLDivElement>(null);
   const selected = options.find((option) => option.value === value);
   const filtered = options.filter((option) =>
     option.label.toLowerCase().includes(search.toLowerCase()),
   );
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (
+        selectRef.current &&
+        !selectRef.current.contains(event.target as Node)
+      ) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [open]);
+
   return (
-    <div className="searchable-select">
+    <div ref={selectRef} className="searchable-select">
       <button
         type="button"
         className="searchable-select-trigger"
         onClick={() => setOpen((current) => !current)}
-        onBlur={() => window.setTimeout(() => setOpen(false), 150)}
         aria-expanded={open}
       >
         <span>{selected?.label || placeholder}</span>
@@ -146,7 +161,6 @@ export function SearchableSelect({
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder={searchPlaceholder}
-              onBlur={() => window.setTimeout(() => setOpen(false), 150)}
             />
           </div>
           <div className="searchable-select-options">
