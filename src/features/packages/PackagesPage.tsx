@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Gift, Plus, Trash2, UserPlus } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Gift, Pencil, Plus, Trash2 } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -24,6 +24,10 @@ interface PackageRow {
   price: number | string;
   validity_days: number | null;
   active: boolean;
+  package_items: Array<{
+    quantity: number;
+    serviceName: string;
+  }>;
 }
 interface CustomerPackageRow {
   id: string;
@@ -38,13 +42,34 @@ interface CustomerPackageRow {
 async function getPackages(page: number, pageSize: number) {
   const { data, count, error } = await supabase
     .from("packages")
-    .select("id, name, description, price, validity_days, active", {
-      count: "exact",
-    })
+    .select("id, name, description, price, validity_days, active", { count: "exact" })
     .order("name")
     .range((page - 1) * pageSize, page * pageSize - 1);
   if (error) throw error;
-  return { rows: (data ?? []) as PackageRow[], total: count ?? 0 };
+  const packages = data ?? [];
+  const packageIds = packages.map((item) => item.id);
+  if (!packageIds.length) return { rows: [], total: count ?? 0 };
+  const { data: itemData, error: itemError } = await supabase
+    .from("package_items")
+    .select("package_id, service_id, quantity")
+    .in("package_id", packageIds);
+  if (itemError) throw itemError;
+  const serviceIds = [...new Set((itemData ?? []).map((item) => item.service_id))];
+  const { data: serviceData, error: serviceError } = serviceIds.length
+    ? await supabase.from("services").select("id, name").in("id", serviceIds)
+    : { data: [], error: null };
+  if (serviceError) throw serviceError;
+  const serviceNames = new Map((serviceData ?? []).map((service) => [service.id, service.name]));
+  const rows = packages.map((item) => ({
+    ...item,
+    package_items: (itemData ?? [])
+      .filter((packageItem) => packageItem.package_id === item.id)
+      .map((packageItem) => ({
+        quantity: packageItem.quantity,
+        serviceName: serviceNames.get(packageItem.service_id) ?? "Servicio no disponible",
+      })),
+  })) as PackageRow[];
+  return { rows, total: count ?? 0 };
 }
 async function getCustomerPackages(page: number, pageSize: number) {
   const { data, count, error } = await supabase
@@ -90,7 +115,7 @@ type PackageValues = z.infer<typeof packageSchema>;
 type PackageInput = z.input<typeof packageSchema>;
 export function PackagesPage() {
   const [open, setOpen] = useState(false);
-  const [purchase, setPurchase] = useState<PackageRow | null>(null);
+  const [editing, setEditing] = useState<PackageRow | null>(null);
   const [page, setPage] = useState(1);
   const [assignmentPage, setAssignmentPage] = useState(1);
   const pageSize = 6;
@@ -141,10 +166,10 @@ export function PackagesPage() {
                     {item.active ? "Activo" : "Inactivo"}
                   </Badge>
                   <IconButton
-                    label="Asignar paquete a cliente"
-                    onClick={() => setPurchase(item)}
+                    label="Editar paquete"
+                    onClick={() => setEditing(item)}
                   >
-                    <UserPlus size={15} />
+                    <Pencil size={15} />
                   </IconButton>
                   <IconButton
                     label="Desactivar paquete"
@@ -159,6 +184,18 @@ export function PackagesPage() {
               <p className="muted">
                 {item.description || "Paquete de servicios"}
               </p>
+              <div className="package-services">
+                <strong>Incluye:</strong>
+                {item.package_items?.length ? (
+                  item.package_items.map((packageItem) => (
+                    <span key={`${item.id}-${packageItem.serviceName}`}>
+                      {packageItem.quantity} × {packageItem.serviceName}
+                    </span>
+                  ))
+                ) : (
+                  <span>Sin servicios configurados</span>
+                )}
+              </div>
               <div className="cash-total">
                 <span>Precio</span>
                 <strong>{formatCurrency(item.price)}</strong>
@@ -243,16 +280,19 @@ export function PackagesPage() {
         )}
       </Card>
       {open && <PackageForm onClose={() => setOpen(false)} />}
-      {purchase && (
-        <PurchasePackageForm
-          packageRow={purchase}
-          onClose={() => setPurchase(null)}
-        />
+      {editing && (
+        <PackageForm packageRow={editing} onClose={() => setEditing(null)} />
       )}
     </>
   );
 }
-function PackageForm({ onClose }: { onClose: () => void }) {
+function PackageForm({
+  packageRow,
+  onClose,
+}: {
+  packageRow?: PackageRow;
+  onClose: () => void;
+}) {
   const queryClient = useQueryClient();
   const [error, setError] = useState("");
   const { data: services } = useQuery({
@@ -281,22 +321,60 @@ function PackageForm({ onClose }: { onClose: () => void }) {
     control: form.control,
     name: "items",
   });
+  const { data: existingItems } = useQuery({
+    queryKey: ["package-items", packageRow?.id],
+    enabled: Boolean(packageRow),
+    queryFn: async () => {
+      const { data, error: queryError } = await supabase
+        .from("package_items")
+        .select("service_id, quantity")
+        .eq("package_id", packageRow!.id)
+        .order("id");
+      if (queryError) throw queryError;
+      return data ?? [];
+    },
+  });
+  useEffect(() => {
+    if (!packageRow || !existingItems) return;
+    form.reset({
+      name: packageRow.name,
+      description: packageRow.description ?? "",
+      price: Number(packageRow.price),
+      validity: packageRow.validity_days ?? 0,
+      items: existingItems.map((item) => ({
+        serviceId: item.service_id,
+        quantity: item.quantity,
+      })),
+    });
+  }, [existingItems, form, packageRow]);
   const mutation = useMutation({
     mutationFn: async (values: PackageValues) => {
-      const { data: packageRow, error: packageError } = await supabase
-        .from("packages")
-        .insert({
-          name: values.name,
-          description: values.description || null,
-          price: values.price,
-          validity_days: values.validity || null,
-        })
-        .select("id")
-        .single();
+      const payload = {
+        name: values.name,
+        description: values.description || null,
+        price: values.price,
+        validity_days: values.validity || null,
+      };
+      const { data: savedPackage, error: packageError } = packageRow
+        ? await supabase
+            .from("packages")
+            .update(payload)
+            .eq("id", packageRow.id)
+            .select("id")
+            .single()
+        : await supabase.from("packages").insert(payload).select("id").single();
       if (packageError) throw packageError;
+      const packageId = savedPackage.id;
+      if (packageRow) {
+        const { error: deleteError } = await supabase
+          .from("package_items")
+          .delete()
+          .eq("package_id", packageId);
+        if (deleteError) throw deleteError;
+      }
       const { error: itemError } = await supabase.from("package_items").insert(
         values.items.map((item) => ({
-          package_id: packageRow.id,
+          package_id: packageId,
           service_id: item.serviceId,
           quantity: item.quantity,
         })),
@@ -316,8 +394,10 @@ function PackageForm({ onClose }: { onClose: () => void }) {
       <div className="modal" role="dialog" aria-modal="true">
         <div className="modal-head">
           <div>
-            <span className="eyebrow">NUEVO PAQUETE</span>
-            <h2>Crear paquete</h2>
+            <span className="eyebrow">
+              {packageRow ? "EDITAR PAQUETE" : "NUEVO PAQUETE"}
+            </span>
+            <h2>{packageRow ? "Editar paquete" : "Crear paquete"}</h2>
           </div>
           <button className="modal-close" onClick={onClose} aria-label="Cerrar">
             ×
@@ -418,7 +498,7 @@ function PackageForm({ onClose }: { onClose: () => void }) {
               Cancelar
             </Button>
             <Button type="submit" loading={mutation.isPending}>
-              Guardar paquete
+              {packageRow ? "Actualizar paquete" : "Guardar paquete"}
             </Button>
           </div>
         </form>
@@ -563,3 +643,5 @@ function PurchasePackageForm({
     </div>
   );
 }
+
+void PurchasePackageForm;

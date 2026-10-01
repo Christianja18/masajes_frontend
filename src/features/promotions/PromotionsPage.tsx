@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Percent, Plus, Trash2 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Percent, Pencil, Plus, Trash2 } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -24,6 +24,8 @@ interface Promotion {
   discount_value: number | string;
   starts_at: string | null;
   ends_at: string | null;
+  max_uses: number | null;
+  uses_count: number;
   active: boolean;
 }
 async function getPromotions(page: number, pageSize: number) {
@@ -50,6 +52,7 @@ type PromotionValues = z.infer<typeof promotionSchema>;
 type PromotionInput = z.input<typeof promotionSchema>;
 export function PromotionsPage() {
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<Promotion | null>(null);
   const [page, setPage] = useState(1);
   const pageSize = 6;
   const queryClient = useQueryClient();
@@ -95,6 +98,12 @@ export function PromotionsPage() {
                     {promotion.active ? "Activa" : "Inactiva"}
                   </Badge>
                   <IconButton
+                    label="Editar promoción"
+                    onClick={() => setEditing(promotion)}
+                  >
+                    <Pencil size={15} />
+                  </IconButton>
+                  <IconButton
                     label="Desactivar promoción"
                     variant="danger"
                     onClick={() => void deactivate(promotion.id)}
@@ -132,10 +141,19 @@ export function PromotionsPage() {
         </Card>
       )}
       {open && <PromotionForm onClose={() => setOpen(false)} />}
+      {editing && (
+        <PromotionForm promotion={editing} onClose={() => setEditing(null)} />
+      )}
     </>
   );
 }
-function PromotionForm({ onClose }: { onClose: () => void }) {
+function PromotionForm({
+  promotion,
+  onClose,
+}: {
+  promotion?: Promotion;
+  onClose: () => void;
+}) {
   const queryClient = useQueryClient();
   const [error, setError] = useState("");
   const { data: services } = useQuery({
@@ -161,28 +179,68 @@ function PromotionForm({ onClose }: { onClose: () => void }) {
       serviceIds: [],
     },
   });
+  const { data: selectedServices } = useQuery({
+    queryKey: ["promotion-selected-services", promotion?.id],
+    enabled: Boolean(promotion),
+    queryFn: async () => {
+      const { data, error: queryError } = await supabase
+        .from("promotion_services")
+        .select("service_id")
+        .eq("promotion_id", promotion!.id);
+      if (queryError) throw queryError;
+      return (data ?? []).map((item) => item.service_id);
+    },
+  });
+  useEffect(() => {
+    if (!promotion) return;
+    form.reset({
+      name: promotion.name,
+      description: promotion.description ?? "",
+      type: promotion.discount_type,
+      value: Number(promotion.discount_value),
+      maxUses: promotion.max_uses ?? 0,
+      serviceIds: selectedServices ?? [],
+    });
+  }, [form, promotion, selectedServices]);
   const mutation = useMutation({
     mutationFn: async (values: PromotionValues) => {
       if (values.type === "percentage" && values.value > 100)
         throw new Error("Porcentaje inválido");
-      const { data: promotion, error: insertError } = await supabase
-        .from("promotions")
-        .insert({
-          name: values.name,
-          description: values.description || null,
-          discount_type: values.type,
-          discount_value: values.value,
-          max_uses: values.maxUses || null,
-        })
-        .select("id")
-        .single();
+      const payload = {
+        name: values.name,
+        description: values.description || null,
+        discount_type: values.type,
+        discount_value: values.value,
+        max_uses: values.maxUses || null,
+      };
+      const { data: savedPromotion, error: saveError } = promotion
+        ? await supabase
+            .from("promotions")
+            .update(payload)
+            .eq("id", promotion.id)
+            .select("id")
+            .single()
+        : await supabase
+            .from("promotions")
+            .insert(payload)
+            .select("id")
+            .single();
+      const insertError = saveError;
       if (insertError) throw insertError;
+      const promotionId = savedPromotion.id;
+      if (promotion) {
+        const { error: deleteError } = await supabase
+          .from("promotion_services")
+          .delete()
+          .eq("promotion_id", promotionId);
+        if (deleteError) throw deleteError;
+      }
       if (values.serviceIds.length > 0) {
         const { error: relationError } = await supabase
           .from("promotion_services")
           .insert(
             values.serviceIds.map((serviceId) => ({
-              promotion_id: promotion.id,
+              promotion_id: promotionId,
               service_id: serviceId,
             })),
           );

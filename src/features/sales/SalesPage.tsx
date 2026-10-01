@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { Eye, Plus, Printer } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { z } from "zod";
@@ -36,6 +36,13 @@ interface SalePromotion {
   uses_count: number;
   service_ids: string[];
 }
+interface SalePackage {
+  id: string;
+  name: string;
+  price: number | string;
+  validity_days: number | null;
+  package_items: Array<{ service_id: string; quantity: number }>;
+}
 async function getSales(page: number, pageSize: number) {
   const { data, count, error } = await supabase
     .from("sales")
@@ -49,7 +56,7 @@ async function getSales(page: number, pageSize: number) {
   return { rows: (data ?? []) as unknown as SaleRow[], total: count ?? 0 };
 }
 async function getSaleOptions() {
-  const [services, customers, promotions, promotionServices] =
+  const [services, customers, packages, promotions, promotionServices] =
     await Promise.all([
       supabase
         .from("services")
@@ -62,6 +69,13 @@ async function getSaleOptions() {
         .eq("active", true)
         .order("full_name"),
       supabase
+        .from("packages")
+        .select(
+          "id, name, price, validity_days, package_items(service_id, quantity)",
+        )
+        .eq("active", true)
+        .order("name"),
+      supabase
         .from("promotions")
         .select(
           "id, name, discount_type, discount_value, starts_at, ends_at, max_uses, uses_count",
@@ -72,6 +86,7 @@ async function getSaleOptions() {
     ]);
   if (services.error) throw services.error;
   if (customers.error) throw customers.error;
+  if (packages.error) throw packages.error;
   if (promotions.error) throw promotions.error;
   if (promotionServices.error) throw promotionServices.error;
   const now = Date.now();
@@ -84,6 +99,7 @@ async function getSaleOptions() {
   return {
     services: (services.data ?? []) as Service[],
     customers: (customers.data ?? []) as Customer[],
+    packages: (packages.data ?? []) as unknown as SalePackage[],
     promotions: (promotions.data ?? [])
       .filter((promotion) => {
         const starts = promotion.starts_at
@@ -109,7 +125,9 @@ const saleSchema = z.object({
   items: z
     .array(
       z.object({
-        serviceId: z.string().min(1, "Selecciona un servicio"),
+        itemType: z.enum(["service", "package"]),
+        serviceId: z.string(),
+        packageId: z.string(),
         quantity: z.coerce.number().int().min(1),
       }),
     )
@@ -124,6 +142,7 @@ type SaleValues = z.infer<typeof saleSchema>;
 type SaleInput = z.input<typeof saleSchema>;
 export function SalesPage() {
   const [open, setOpen] = useState(false);
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const pageSize = 6;
   const { data, isLoading, error } = useQuery({
@@ -159,6 +178,7 @@ export function SalesPage() {
                   <th>Descuento</th>
                   <th>Promoción</th>
                   <th>Estado</th>
+                  <th aria-label="Acciones" />
                 </tr>
               </thead>
               <tbody>
@@ -180,6 +200,17 @@ export function SalesPage() {
                     <td>
                       <Badge tone="success">Registrada</Badge>
                     </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="icon-action"
+                        title="Ver detalle e imprimir boleta"
+                        aria-label="Ver detalle e imprimir boleta"
+                        onClick={() => setDetailId(sale.id)}
+                      >
+                        <Eye size={15} />
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -200,7 +231,158 @@ export function SalesPage() {
         </Card>
       )}
       {open && <SaleForm onClose={() => setOpen(false)} />}
+      {detailId && (
+        <SaleDetail saleId={detailId} onClose={() => setDetailId(null)} />
+      )}
     </>
+  );
+}
+function SaleDetail({
+  saleId,
+  onClose,
+}: {
+  saleId: string;
+  onClose: () => void;
+}) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["sale-detail", saleId],
+    queryFn: async () => {
+      const [saleResult, itemsResult, paymentsResult] = await Promise.all([
+        supabase
+          .from("sales")
+          .select(
+            "id, customer_id, subtotal, discount, total, created_at, customer:customers(full_name, phone, email), promotion:promotions(name)",
+          )
+          .eq("id", saleId)
+          .single(),
+        supabase
+          .from("sale_items")
+          .select("description, quantity, unit_price, discount, total")
+          .eq("sale_id", saleId),
+        supabase
+          .from("payments")
+          .select("payment_method, amount, reference_number")
+          .eq("sale_id", saleId),
+      ]);
+      if (saleResult.error) throw saleResult.error;
+      if (itemsResult.error) throw itemsResult.error;
+      if (paymentsResult.error) throw paymentsResult.error;
+      let customerName = saleResult.data.customer?.[0]?.full_name ?? null;
+      if (!customerName && saleResult.data.customer_id) {
+        const { data: customer, error: customerError } = await supabase
+          .from("customers")
+          .select("full_name")
+          .eq("id", saleResult.data.customer_id)
+          .maybeSingle();
+        if (customerError) throw customerError;
+        customerName = customer?.full_name ?? null;
+      }
+      return {
+        sale: saleResult.data,
+        customerName,
+        items: itemsResult.data ?? [],
+        payments: paymentsResult.data ?? [],
+      };
+    },
+  });
+  if (isLoading) {
+    return (
+      <div className="modal-backdrop">
+        <div className="modal">Cargando detalle…</div>
+      </div>
+    );
+  }
+  if (error || !data) {
+    return (
+      <div className="modal-backdrop">
+        <div className="modal">
+          <ErrorMessage message="No se pudo cargar el detalle de la venta." />
+          <Button variant="secondary" onClick={onClose}>
+            Cerrar
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="modal-backdrop">
+      <div className="modal printable-receipt" role="dialog" aria-modal="true">
+        <div className="modal-head">
+          <div>
+            <span className="eyebrow">VOUCHER</span>
+            <h2>Detalle de venta</h2>
+          </div>
+          <button
+            className="modal-close no-print"
+            onClick={onClose}
+            aria-label="Cerrar"
+          >
+            ×
+          </button>
+        </div>
+        <div className="receipt-header">
+          <strong>Centro de Masajes</strong>
+          <span>
+            {new Intl.DateTimeFormat("es-PE", {
+              dateStyle: "medium",
+              timeStyle: "short",
+              timeZone: "America/Lima",
+            }).format(new Date(data.sale.created_at))}
+          </span>
+          <span>
+            Cliente:{" "}
+            {data.customerName ||
+              (data.sale.customer_id
+                ? "Cliente no disponible"
+                : "Cliente no registrado")}
+          </span>
+          {data.sale.promotion?.[0]?.name && (
+            <span>Promoción: {data.sale.promotion[0].name}</span>
+          )}
+        </div>
+        <div className="responsive-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Servicio</th>
+                <th>Cant.</th>
+                <th>Precio</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.items.map((item, index) => (
+                <tr key={index}>
+                  <td>{item.description}</td>
+                  <td>{item.quantity}</td>
+                  <td>{formatCurrency(item.unit_price)}</td>
+                  <td>{formatCurrency(item.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="receipt-totals">
+          <span>Subtotal: {formatCurrency(data.sale.subtotal)}</span>
+          <span>Descuento: {formatCurrency(data.sale.discount)}</span>
+          <strong>Total: {formatCurrency(data.sale.total)}</strong>
+        </div>
+        {data.payments.length > 0 && (
+          <p className="muted">
+            Pago:{" "}
+            {data.payments.map((payment) => payment.payment_method).join(", ")}
+          </p>
+        )}
+        <div className="modal-actions no-print">
+          <Button variant="secondary" onClick={onClose}>
+            Cerrar
+          </Button>
+          <Button onClick={() => window.print()}>
+            <Printer size={15} /> Imprimir voucher
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
 function SaleForm({ onClose }: { onClose: () => void }) {
@@ -213,7 +395,9 @@ function SaleForm({ onClose }: { onClose: () => void }) {
   const form = useForm<SaleInput, unknown, SaleValues>({
     resolver: zodResolver(saleSchema),
     defaultValues: {
-      items: [{ serviceId: "", quantity: 1 }],
+      items: [
+        { itemType: "service", serviceId: "", packageId: "", quantity: 1 },
+      ],
       customerId: "",
       promotionId: "",
       discount: 0,
@@ -226,10 +410,13 @@ function SaleForm({ onClose }: { onClose: () => void }) {
   const promotionId = form.watch("promotionId");
   const promotion = options?.promotions.find((item) => item.id === promotionId);
   const subtotal = (items ?? []).reduce((sum, item) => {
-    const service = options?.services.find(
-      (option) => option.id === item.serviceId,
-    );
-    return sum + Number(service?.price ?? 0) * Number(item.quantity || 0);
+    const price =
+      item.itemType === "package"
+        ? options?.packages.find((option) => option.id === item.packageId)
+            ?.price
+        : options?.services.find((option) => option.id === item.serviceId)
+            ?.price;
+    return sum + Number(price ?? 0) * Number(item.quantity || 0);
   }, 0);
   const promotionBase = (items ?? []).reduce((sum, item) => {
     const applies =
@@ -237,10 +424,13 @@ function SaleForm({ onClose }: { onClose: () => void }) {
       promotion.service_ids.length === 0 ||
       promotion.service_ids.includes(item.serviceId);
     if (!applies) return sum;
-    const service = options?.services.find(
-      (option) => option.id === item.serviceId,
-    );
-    return sum + Number(service?.price ?? 0) * Number(item.quantity || 0);
+    const price =
+      item.itemType === "package"
+        ? options?.packages.find((option) => option.id === item.packageId)
+            ?.price
+        : options?.services.find((option) => option.id === item.serviceId)
+            ?.price;
+    return sum + Number(price ?? 0) * Number(item.quantity || 0);
   }, 0);
   const promotionDiscount = promotion
     ? promotion.discount_type === "percentage"
@@ -256,14 +446,23 @@ function SaleForm({ onClose }: { onClose: () => void }) {
   const mutation = useMutation({
     mutationFn: async (values: SaleValues) => {
       const saleItems = values.items.map((item) => {
-        const service = options?.services.find(
-          (option) => option.id === item.serviceId,
-        );
-        if (!service) throw new Error("Servicio inválido");
+        const service =
+          item.itemType === "service"
+            ? options?.services.find((option) => option.id === item.serviceId)
+            : null;
+        const packageRow =
+          item.itemType === "package"
+            ? options?.packages.find((option) => option.id === item.packageId)
+            : null;
+        if (!service && !packageRow) throw new Error("Ítem inválido");
+        if (packageRow && !values.customerId)
+          throw new Error("Un paquete requiere cliente registrado");
         return {
           service,
+          packageRow,
           quantity: item.quantity,
-          subtotal: Number(service.price) * item.quantity,
+          subtotal:
+            Number(service?.price ?? packageRow?.price ?? 0) * item.quantity,
         };
       });
       const saleSubtotal = saleItems.reduce(
@@ -279,7 +478,7 @@ function SaleForm({ onClose }: { onClose: () => void }) {
         const applies =
           !selectedPromotion ||
           selectedPromotion.service_ids.length === 0 ||
-          selectedPromotion.service_ids.includes(item.service.id);
+          selectedPromotion.service_ids.includes(item.service?.id ?? "");
         return applies ? sum + item.subtotal : sum;
       }, 0);
       const promotionDiscount = selectedPromotion
@@ -307,15 +506,37 @@ function SaleForm({ onClose }: { onClose: () => void }) {
       const { error: itemError } = await supabase.from("sale_items").insert(
         saleItems.map((item) => ({
           sale_id: sale.id,
-          service_id: item.service.id,
-          description: item.service.name,
+          service_id: item.service?.id ?? null,
+          package_id: item.packageRow?.id ?? null,
+          description: item.service?.name ?? item.packageRow?.name ?? "Ítem",
           quantity: item.quantity,
-          unit_price: item.service.price,
+          unit_price: item.service?.price ?? item.packageRow?.price ?? 0,
           discount: 0,
           total: item.subtotal,
         })),
       );
       if (itemError) throw itemError;
+      for (const item of saleItems.filter((saleItem) => saleItem.packageRow)) {
+        const packageRow = item.packageRow!;
+        const totalSessions = packageRow.package_items.reduce(
+          (sum, packageItem) => sum + packageItem.quantity * item.quantity,
+          0,
+        );
+        const expiresAt = packageRow.validity_days
+          ? new Date(
+              Date.now() + packageRow.validity_days * 86400000,
+            ).toISOString()
+          : null;
+        const { error: customerPackageError } = await supabase
+          .from("customer_packages")
+          .insert({
+            customer_id: values.customerId,
+            package_id: packageRow.id,
+            total_sessions: totalSessions,
+            expires_at: expiresAt,
+          });
+        if (customerPackageError) throw customerPackageError;
+      }
       if (selectedPromotion) {
         const { error: promotionError } = await supabase
           .from("promotions")
@@ -343,6 +564,7 @@ function SaleForm({ onClose }: { onClose: () => void }) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["sales"] });
       void queryClient.invalidateQueries({ queryKey: ["cash"] });
+      void queryClient.invalidateQueries({ queryKey: ["customer-packages"] });
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       onClose();
     },
@@ -436,11 +658,18 @@ function SaleForm({ onClose }: { onClose: () => void }) {
           </Field>
           <div className="form-section">
             <div className="card-heading">
-              <strong>Servicios vendidos</strong>
+              <strong>Servicios y paquetes vendidos</strong>
               <Button
                 type="button"
                 variant="secondary"
-                onClick={() => append({ serviceId: "", quantity: 1 })}
+                onClick={() =>
+                  append({
+                    itemType: "service",
+                    serviceId: "",
+                    packageId: "",
+                    quantity: 1,
+                  })
+                }
               >
                 <Plus size={15} /> Agregar servicio
               </Button>
@@ -448,17 +677,33 @@ function SaleForm({ onClose }: { onClose: () => void }) {
             {fields.map((field, index) => (
               <div className="form-grid" key={field.id}>
                 <Field
-                  label={"Servicio " + (index + 1)}
+                  label={
+                    (items[index]?.itemType === "package"
+                      ? "Paquete "
+                      : "Servicio ") +
+                    (index + 1)
+                  }
                   error={
                     form.formState.errors.items?.[index]?.serviceId?.message
                   }
                 >
                   <Controller
                     control={form.control}
-                    name={`items.${index}.serviceId` as const}
+                    name={
+                      ("items." +
+                        index +
+                        "." +
+                        (items[index]?.itemType === "package"
+                          ? "packageId"
+                          : "serviceId")) as never
+                    }
                     render={({ field: controllerField }) => (
                       <SearchableSelect
-                        options={(options?.services ?? []).map((service) => ({
+                        options={(
+                          (items[index]?.itemType === "package"
+                            ? options?.packages
+                            : options?.services) ?? []
+                        ).map((service) => ({
                           value: service.id,
                           label:
                             service.name +

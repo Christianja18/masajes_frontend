@@ -32,7 +32,7 @@ async function getBookings(page: number, pageSize: number, search: string) {
   let query = supabase
     .from("bookings")
     .select(
-      "id, customer_id, therapist_id, service_id, customer_package_id, guest_name, guest_phone, starts_at, ends_at, status, location_type, address, address_reference, customer:customers(full_name), therapist:therapists(full_name), service:services(name, duration_minutes, price), customer_package:customer_packages(package:packages(name))",
+      "id, customer_id, therapist_id, service_id, package_id, customer_package_id, guest_name, guest_phone, starts_at, ends_at, status, location_type, address, address_reference, customer:customers(full_name), therapist:therapists(full_name), service:services(name, duration_minutes, price), package:packages(name, price), customer_package:customer_packages(package:packages(name))",
       { count: "exact" },
     )
     .order("starts_at", { ascending: false })
@@ -70,6 +70,7 @@ const bookingSchema = z
     guestPhone: z.string(),
     guestEmail: z.string(),
     serviceId: z.string().min(1, "Selecciona un servicio"),
+    packageId: z.string(),
     therapistId: z.string().min(1, "Selecciona una masajista"),
     date: z.string().min(1, "Selecciona una fecha"),
     time: z.string().min(1, "Selecciona una hora"),
@@ -109,7 +110,7 @@ const bookingSchema = z
 type BookingFormValues = z.infer<typeof bookingSchema>;
 
 async function getFormOptions() {
-  const [services, therapists, customers, customerPackages] = await Promise.all(
+  const [services, therapists, customers, packages, customerPackages] = await Promise.all(
     [
       supabase
         .from("services")
@@ -127,6 +128,11 @@ async function getFormOptions() {
         .eq("active", true)
         .order("full_name"),
       supabase
+        .from("packages")
+        .select("id, name, price, validity_days, package_items(service_id, quantity)")
+        .eq("active", true)
+        .order("name"),
+      supabase
         .from("customer_packages")
         .select(
           "id, customer_id, total_sessions, used_sessions, expires_at, active, package:packages(name, package_items(service_id))",
@@ -138,11 +144,19 @@ async function getFormOptions() {
   if (services.error) throw services.error;
   if (therapists.error) throw therapists.error;
   if (customers.error) throw customers.error;
+  if (packages.error) throw packages.error;
   if (customerPackages.error) throw customerPackages.error;
   return {
     services: (services.data ?? []) as Service[],
     therapists: (therapists.data ?? []) as Therapist[],
     customers: (customers.data ?? []) as Customer[],
+    packages: (packages.data ?? []) as Array<{
+      id: string;
+      name: string;
+      price: number;
+      validity_days: number | null;
+      package_items: Array<{ service_id: string; quantity: number }>;
+    }>,
     customerPackages: (customerPackages.data ?? []) as Array<{
       id: string;
       customer_id: string;
@@ -161,6 +175,7 @@ async function getFormOptions() {
 export function BookingsPage() {
   const [search, setSearch] = useState("");
   const [formOpen, setFormOpen] = useState(false);
+  const [checkoutBooking, setCheckoutBooking] = useState<Booking | null>(null);
   const [page, setPage] = useState(1);
   const queryClient = useQueryClient();
   useEffect(() => {
@@ -188,18 +203,6 @@ export function BookingsPage() {
     if (!updateError) {
       void queryClient.invalidateQueries({ queryKey: ["bookings"] });
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-    }
-  };
-  const completeBooking = async (id: string) => {
-    const { error: updateError } = await supabase
-      .from("bookings")
-      .update({ status: "completed" })
-      .eq("id", id)
-      .in("status", ["pending", "confirmed", "in_progress"]);
-    if (!updateError) {
-      void queryClient.invalidateQueries({ queryKey: ["bookings"] });
-      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      void queryClient.invalidateQueries({ queryKey: ["customer-packages"] });
     }
   };
   const pageSize = 6;
@@ -271,29 +274,6 @@ export function BookingsPage() {
                       <strong>{formatDate(booking.starts_at)}</strong>
                     </td>
                     <td>
-                      <IconButton
-                        label="Marcar como completada"
-                        disabled={
-                          booking.status === "cancelled" ||
-                          booking.status === "completed"
-                        }
-                        onClick={() => void completeBooking(booking.id)}
-                      >
-                        <CheckCircle2 size={15} />
-                      </IconButton>
-                      <IconButton
-                        label="Cancelar reserva"
-                        variant="danger"
-                        disabled={
-                          booking.status === "cancelled" ||
-                          booking.status === "completed"
-                        }
-                        onClick={() => void cancelBooking(booking.id)}
-                      >
-                        <Ban size={15} />
-                      </IconButton>
-                    </td>
-                    <td>
                       <strong>
                         {booking.customer?.full_name ||
                           booking.guest_name ||
@@ -304,7 +284,11 @@ export function BookingsPage() {
                       </small>
                     </td>
                     <td>{booking.service?.name || "—"}</td>
-                    <td>{booking.customer_package?.package?.name || "—"}</td>
+                    <td>
+                      {booking.package?.name ||
+                        booking.customer_package?.package?.name ||
+                        "—"}
+                    </td>
                     <td>{booking.therapist?.full_name || "—"}</td>
                     <td>
                       {booking.location_type === "customer_home" ? (
@@ -320,6 +304,29 @@ export function BookingsPage() {
                         {statusLabel[booking.status]}
                       </Badge>
                     </td>
+                    <td>
+                      <IconButton
+                        label="Marcar como completada"
+                        disabled={
+                          booking.status === "cancelled" ||
+                          booking.status === "completed"
+                        }
+                        onClick={() => setCheckoutBooking(booking)}
+                      >
+                        <CheckCircle2 size={15} />
+                      </IconButton>
+                      <IconButton
+                        label="Cancelar reserva"
+                        variant="danger"
+                        disabled={
+                          booking.status === "cancelled" ||
+                          booking.status === "completed"
+                        }
+                        onClick={() => void cancelBooking(booking.id)}
+                      >
+                        <Ban size={15} />
+                      </IconButton>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -333,7 +340,224 @@ export function BookingsPage() {
         </Card>
       )}
       {formOpen && <BookingForm onClose={() => setFormOpen(false)} />}
+      {checkoutBooking && (
+        <BookingCheckout
+          booking={checkoutBooking}
+          onClose={() => setCheckoutBooking(null)}
+        />
+      )}
     </>
+  );
+}
+
+const checkoutSchema = z.object({
+  promotionId: z.string(),
+  paymentMethod: z.enum(["cash", "yape", "plin", "card", "transfer", "other"]),
+  amount: z.coerce.number().min(0, "El importe no puede ser negativo"),
+});
+type CheckoutValues = z.infer<typeof checkoutSchema>;
+type CheckoutInput = z.input<typeof checkoutSchema>;
+
+function BookingCheckout({
+  booking,
+  onClose,
+}: {
+  booking: Booking;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [serverError, setServerError] = useState("");
+  const isPackageCovered = Boolean(booking.customer_package_id);
+  const isCatalogPackage = Boolean(booking.package_id);
+  const { data: register } = useQuery({
+    queryKey: ["open-cash-register"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("cash_registers")
+        .select("id")
+        .eq("status", "open")
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+    enabled: !isPackageCovered,
+  });
+  const { data: promotions } = useQuery({
+    queryKey: ["booking-promotions", booking.service_id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("promotions")
+        .select(
+          "id, name, discount_type, discount_value, starts_at, ends_at, max_uses, uses_count, promotion_services(service_id)",
+        )
+        .eq("active", true)
+        .order("name");
+      if (error) throw error;
+      return (data ?? []).filter((promotion) => {
+        const starts = promotion.starts_at
+          ? new Date(promotion.starts_at).getTime()
+          : -Infinity;
+        const ends = promotion.ends_at
+          ? new Date(promotion.ends_at).getTime()
+          : Infinity;
+        const services = promotion.promotion_services ?? [];
+        return (
+          starts <= Date.now() &&
+          Date.now() <= ends &&
+          (promotion.max_uses === null ||
+            promotion.uses_count < promotion.max_uses) &&
+          (services.length === 0 ||
+            services.some((item) => item.service_id === booking.service_id))
+        );
+      });
+    },
+    enabled: !isPackageCovered && !isCatalogPackage,
+  });
+  const form = useForm<CheckoutInput, unknown, CheckoutValues>({
+    resolver: zodResolver(checkoutSchema),
+    defaultValues: {
+      promotionId: "",
+      paymentMethod: "cash",
+      amount: isPackageCovered
+        ? 0
+        : isCatalogPackage
+          ? Number(booking.package?.price ?? 0)
+          : Number(booking.service?.price ?? 0),
+    },
+  });
+  const selectedPromotion = promotions?.find(
+    (promotion) => promotion.id === form.watch("promotionId"),
+  );
+  const promotionDiscount = selectedPromotion && !isCatalogPackage
+    ? selectedPromotion.discount_type === "percentage"
+      ? Number(booking.service?.price ?? 0) *
+        (Number(selectedPromotion.discount_value) / 100)
+      : Math.min(
+          Number(booking.service?.price ?? 0),
+          Number(selectedPromotion.discount_value),
+        )
+    : 0;
+  const total = Math.max(
+    0,
+    (isCatalogPackage ? Number(booking.package?.price ?? 0) : Number(booking.service?.price ?? 0)) -
+      promotionDiscount,
+  );
+  useEffect(() => {
+    if (!isPackageCovered) form.setValue("amount", total);
+  }, [form, isPackageCovered, total]);
+  const mutation = useMutation({
+    mutationFn: async (values: CheckoutValues) => {
+      if (!isPackageCovered && values.amount <= 0)
+        throw new Error("Ingresa el importe recibido");
+      const { error } = await supabase.rpc("finalize_booking", {
+        p_booking_id: booking.id,
+        p_cash_register_id: register?.id ?? null,
+        p_payment_method: isPackageCovered ? null : values.paymentMethod,
+        p_amount: isPackageCovered ? 0 : values.amount,
+        p_promotion_id:
+          isPackageCovered || isCatalogPackage ? null : values.promotionId || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["bookings"] });
+      void queryClient.invalidateQueries({ queryKey: ["sales"] });
+      void queryClient.invalidateQueries({ queryKey: ["cash"] });
+      void queryClient.invalidateQueries({ queryKey: ["customer-packages"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      onClose();
+    },
+    onError: (error: Error) => setServerError(error.message),
+  });
+  return (
+    <div className="modal-backdrop">
+      <div className="modal" role="dialog" aria-modal="true">
+        <div className="modal-head">
+          <div>
+            <span className="eyebrow">FINALIZAR ATENCIÓN</span>
+            <h2>{isPackageCovered ? "Usar paquete" : "Cobrar reserva"}</h2>
+          </div>
+          <button className="modal-close" onClick={onClose} aria-label="Cerrar">
+            ×
+          </button>
+        </div>
+        {serverError && <ErrorMessage message={serverError} />}
+        <div className="receipt-header">
+          <strong>{booking.service?.name}</strong>
+          <span>
+            {booking.customer?.full_name ||
+              booking.guest_name ||
+              "Cliente invitado"}
+          </span>
+          {isPackageCovered && (
+            <span className="field-hint">Atención cubierta por paquete.</span>
+          )}
+        </div>
+        <form
+          className="booking-form"
+          onSubmit={form.handleSubmit((values) => mutation.mutate(values))}
+        >
+          {!isPackageCovered && (
+            <>
+              <Field label="Promoción (opcional)">
+                <Controller
+                  control={form.control}
+                  name="promotionId"
+                  render={({ field }) => (
+                    <SearchableSelect
+                      options={(promotions ?? []).map((promotion) => ({
+                        value: promotion.id,
+                        label:
+                          promotion.name +
+                          " · " +
+                          promotion.discount_value +
+                          (promotion.discount_type === "percentage"
+                            ? "%"
+                            : " S/"),
+                      }))}
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Sin promoción"
+                      searchPlaceholder="Buscar promoción…"
+                    />
+                  )}
+                />
+              </Field>
+              <div className="form-grid">
+                <Field label="Método de pago">
+                  <select {...form.register("paymentMethod")}>
+                    <option value="cash">Efectivo</option>
+                    <option value="yape">Yape</option>
+                    <option value="plin">Plin</option>
+                    <option value="card">Tarjeta</option>
+                    <option value="transfer">Transferencia</option>
+                    <option value="other">Otro</option>
+                  </select>
+                </Field>
+                <Field
+                  label={"Importe recibido (S/) · Total " + total.toFixed(2)}
+                >
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    {...form.register("amount")}
+                  />
+                </Field>
+              </div>
+            </>
+          )}
+          <div className="modal-actions">
+            <Button type="button" variant="secondary" onClick={onClose}>
+              Cancelar
+            </Button>
+            <Button type="submit" loading={mutation.isPending}>
+              {isPackageCovered ? "Registrar atención" : "Cobrar y finalizar"}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 
@@ -357,6 +581,7 @@ function BookingForm({ onClose }: { onClose: () => void }) {
     defaultValues: {
       customerMode: "guest",
       customerId: "",
+      packageId: "",
       customerPackageId: "",
       guestName: "",
       guestPhone: "",
@@ -372,7 +597,6 @@ function BookingForm({ onClose }: { onClose: () => void }) {
   });
   const mode = watch("customerMode");
   const location = watch("locationType");
-  const customerId = watch("customerId");
   const serviceId = watch("serviceId");
   const mutation = useMutation({
     mutationFn: async (values: BookingFormValues) => {
@@ -389,10 +613,11 @@ function BookingForm({ onClose }: { onClose: () => void }) {
           values.customerMode === "registered" ? values.customerId : null,
         therapist_id: values.therapistId,
         service_id: values.serviceId,
-        customer_package_id:
-          values.customerMode === "registered" && values.customerPackageId
-            ? values.customerPackageId
+        package_id:
+          values.customerMode === "registered" && values.packageId
+            ? values.packageId
             : null,
+        customer_package_id: null,
         guest_name:
           values.customerMode === "guest" ? values.guestName.trim() : null,
         guest_phone:
@@ -422,12 +647,8 @@ function BookingForm({ onClose }: { onClose: () => void }) {
       reset();
       onClose();
     },
-    onError: (error: Error) =>
-      setServerError(
-        error.message.includes("horario") || error.message.includes("masajista")
-          ? error.message
-          : "No se pudo guardar la reserva. Verifica horario y datos.",
-      ),
+  onError: (error: Error) =>
+      setServerError(error.message || "No se pudo guardar la reserva."),
   });
   if (isLoading)
     return (
@@ -523,7 +744,7 @@ function BookingForm({ onClose }: { onClose: () => void }) {
                       value={field.value}
                       onChange={(value) => {
                         field.onChange(value);
-                        setValue("customerPackageId", "");
+                        setValue("packageId", "");
                       }}
                       placeholder="Seleccionar cliente"
                       searchPlaceholder="Buscar cliente…"
@@ -546,7 +767,7 @@ function BookingForm({ onClose }: { onClose: () => void }) {
                   value={watch("serviceId")}
                   onChange={(value) => {
                     setValue("serviceId", value);
-                    setValue("customerPackageId", "");
+                    setValue("packageId", "");
                   }}
                   placeholder="Seleccionar servicio"
                   searchPlaceholder="Buscar servicio…"
@@ -574,20 +795,23 @@ function BookingForm({ onClose }: { onClose: () => void }) {
                 <Field label="Paquete (opcional)">
                   <Controller
                     control={control}
-                    name="customerPackageId"
+                    name="packageId"
                     render={({ field }) => (
                       <SearchableSelect
-                        options={(options?.customerPackages ?? [])
+                        options={(options?.packages ?? [])
+                          .map((item) => ({
+                            ...item,
+                            package: [{ name: item.name }],
+                            total_sessions: item.package_items.reduce(
+                              (total, packageItem) => total + packageItem.quantity,
+                              0,
+                            ),
+                            used_sessions: 0,
+                          }))
                           .filter(
                             (item) =>
-                              item.customer_id === customerId &&
-                              (item.expires_at === null ||
-                                new Date(item.expires_at).getTime() >=
-                                  Date.now()) &&
-                              item.used_sessions < item.total_sessions &&
-                              item.package?.[0]?.package_items?.some(
-                                (packageItem) =>
-                                  packageItem.service_id === serviceId,
+                              item.package_items.some(
+                                (packageItem) => packageItem.service_id === serviceId,
                               ),
                           )
                           .map((item) => ({
@@ -596,7 +820,11 @@ function BookingForm({ onClose }: { onClose: () => void }) {
                           }))}
                         value={field.value}
                         onChange={field.onChange}
-                        placeholder="Sin paquete"
+                        placeholder={
+                          serviceId
+                            ? "Sin paquete"
+                            : "Selecciona servicio primero"
+                        }
                         searchPlaceholder="Buscar paquete…"
                       />
                     )}
